@@ -1,0 +1,62 @@
+# ============================================================
+# Supabase 项目配置。通过 GitHub Integration 部署时读取本文件。
+# 声明式配置：Storage buckets、Auth 等。密钥不写入此文件。
+# 文档: https://supabase.com/docs/guides/local-development/cli/config
+# ============================================================
+
+project_id = "remote-study-system"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[realtime]
+enabled = true
+
+[auth]
+enabled = true
+site_url = "http://localhost:5173"
+additional_redirect_urls = ["http://localhost:5173"]
+jwt_expiry = 3600
+enable_signup = true
+
+[auth.email]
+enable_signup = true
+# 本地开发关闭邮箱确认，便于测试；生产环境请在 Dashboard 按需开启。
+enable_confirmations = false
+
+# ---------- Storage ----------
+[storage]
+enabled = true
+# 单文件上限（作业文件）
+file_size_limit = "50MiB"
+
+# 私有作业文件桶（与 20260710110200_storage.sql 中的策略配套）
+[storage.buckets.submissions]
+public = false
+file_size_limit = "50MiB"
+allowed_mime_types = [
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "text/plain",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/zip",
+]
+
+[edge_runtime]
+enabled = true
