@@ -4,10 +4,12 @@
  *
  * 运行：npm run test:rls
  * 依赖 .env：SUPABASE_URL / VITE_SUPABASE_PUBLISHABLE_KEY
+ *   （service-role 项需 SUPABASE_SECRET_KEY；缺失时该项跳过并提示）
  *
  * 前置：需存在种子数据（npm run seed:users）。脚本会临时用 student2 造一份提交作为越权目标。
  */
-import { assertConfig, signInAs, anonClient, ACCOUNTS, section, log } from './_shared.mjs'
+import { createClient } from '@supabase/supabase-js'
+import { assertConfig, signInAs, anonClient, ACCOUNTS, section, log, CFG } from './_shared.mjs'
 
 assertConfig()
 const CLASS_ID = '00000000-0000-0000-0000-0000000000c1'
@@ -78,16 +80,52 @@ async function main() {
     expect(allEmpty, '未登录用户读不到 task/submission/grading', `t=${t.data?.length ?? 0} s=${s.data?.length ?? 0} g=${g.data?.length ?? 0}`)
   }
 
-  // 5) 前端伪造 role=admin 无效：修改自己 profile.role 为 admin 应被 RLS/策略约束，且即便改了也拿不到跨机构数据
+  // 5) profiles 敏感字段提权防护（列级权限 + 触发器）
   {
-    // 尝试把自己升级为 admin
-    const { error: upErr } = await s1.client.from('profiles').update({ role: 'admin' }).eq('id', s1.user.id).select('id')
-    // 即使 profiles 允许改自己，仍不能借此读到 audit_logs（仅管理员且策略基于数据库真实判断）
+    // 5.1 student1 改自己的 role 为 admin：必须失败
+    const r1 = await s1.client.from('profiles').update({ role: 'admin' }).eq('id', s1.user.id).select('id')
+    expect(!!r1.error, 'student1 修改自己 role→admin 被拒', r1.error ? `${r1.error.code}: ${r1.error.message}` : `竟成功 影响 ${r1.data?.length ?? 0} 行`)
+
+    // 5.2 student1 改自己的 organization_id：必须失败
+    const r2 = await s1.client.from('profiles').update({ organization_id: '00000000-0000-0000-0000-0000000000ab' }).eq('id', s1.user.id).select('id')
+    expect(!!r2.error, 'student1 修改自己 organization_id 被拒', r2.error ? `${r2.error.code}: ${r2.error.message}` : `竟成功 影响 ${r2.data?.length ?? 0} 行`)
+
+    // 5.3 student1 改自己的 id：必须失败
+    const r3 = await s1.client.from('profiles').update({ id: '00000000-0000-0000-0000-0000000000ff' }).eq('id', s1.user.id).select('id')
+    expect(!!r3.error, 'student1 修改自己 id 被拒', r3.error ? `${r3.error.code}: ${r3.error.message}` : `竟成功 影响 ${r3.data?.length ?? 0} 行`)
+
+    // 5.4 student1 改自己的 email：必须失败
+    const r4 = await s1.client.from('profiles').update({ email: 'hacker@example.com' }).eq('id', s1.user.id).select('id')
+    expect(!!r4.error, 'student1 修改自己 email 被拒', r4.error ? `${r4.error.code}: ${r4.error.message}` : `竟成功 影响 ${r4.data?.length ?? 0} 行`)
+
+    // 5.5 student1 改允许字段 name：必须成功
+    const newName = `王同学-${Date.now()}`
+    const r5 = await s1.client.from('profiles').update({ name: newName }).eq('id', s1.user.id).select('name').single()
+    expect(!r5.error && r5.data?.name === newName, 'student1 修改自己 name 成功', r5.error ? r5.error.message : `name=${r5.data?.name}`)
+
+    // 5.6 修改失败后 is_admin() 必须仍为 false
+    const adm = await s1.client.rpc('is_admin')
+    expect(adm.data === false, '提权失败后 is_admin() 仍为 false', `is_admin=${adm.data}`)
+
+    // 5.7 student1 读取管理员数据（audit_logs）必须继续失败
     const audit = await s1.client.from('audit_logs').select('id').limit(1)
-    // 恢复角色，避免污染
-    await s1.client.from('profiles').update({ role: 'student' }).eq('id', s1.user.id)
-    const stillBlocked = (audit.data?.length ?? 0) === 0
-    expect(stillBlocked, '前端伪造 role=admin 仍无法获得管理员数据', `audit_logs 返回 ${audit.data?.length ?? 0} 条; profileUpd=${upErr?.code ?? 'ok'}`)
+    expect((audit.data?.length ?? 0) === 0, 'student1 读不到管理员数据 audit_logs', `返回 ${audit.data?.length ?? 0} 条`)
+
+    // 5.8 service-role 管理修改测试用户 role：应成功（用 student2 作为受控测试对象）
+    if (CFG.secret) {
+      const admin = createClient(CFG.url, CFG.secret, { auth: { persistSession: false, autoRefreshToken: false } })
+      const up = await admin.from('profiles').update({ role: 'teacher' }).eq('id', s2.user.id).select('role').single()
+      const ok = !up.error && up.data?.role === 'teacher'
+      // 恢复 student2 角色
+      await admin.from('profiles').update({ role: 'student' }).eq('id', s2.user.id)
+      expect(ok, 'service-role 可修改用户 role', up.error ? up.error.message : `role=${up.data?.role}（已恢复）`)
+    } else {
+      log(true, 'service-role role 修改（跳过：未配置 SUPABASE_SECRET_KEY）')
+    }
+
+    // 5.9 确保 student1 role 仍为 student（读取自身校验）
+    const self = await s1.client.from('profiles').select('role').eq('id', s1.user.id).single()
+    expect(self.data?.role === 'student', 'student1 的 role 仍为 student', `role=${self.data?.role}`)
   }
 
   // 6) 正式提交后的 submission_version 不能被覆盖
@@ -101,7 +139,7 @@ async function main() {
   await teacher.client.from('tasks').delete().eq('id', task.id)
 
   section('RLS 结果')
-  console.log(failures === 0 ? '✅ 六项越权测试全部符合预期' : `❌ 有 ${failures} 项不符合预期`)
+  console.log(failures === 0 ? '✅ 所有越权/提权测试全部符合预期' : `❌ 有 ${failures} 项不符合预期`)
   process.exit(failures === 0 ? 0 : 1)
 }
 
