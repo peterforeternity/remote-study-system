@@ -24,12 +24,15 @@ async function main() {
   const s1 = await signInAs(ACCOUNTS.student1)
   const s2 = await signInAs(ACCOUNTS.student2)
   const orgId = (await teacher.client.from('profiles').select('organization_id').eq('id', teacher.user.id).single()).data.organization_id
+  let taskId = null
+  try {
 
   // 准备：教师建一个已发布任务；student2 创建一份 submission 作为越权目标
   const { data: task } = await teacher.client.from('tasks').insert({
-    organization_id: orgId, creator_id: teacher.user.id, title: `RLS测试任务-${Date.now()}`,
+    organization_id: orgId, creator_id: teacher.user.id, title: `[E2E] RLS测试任务-${Date.now()}`,
     description: '', subject: '数学', full_score: 100, status: 'published',
   }).select('*').single()
+  taskId = task.id
   await teacher.client.from('task_assignees').insert({ task_id: task.id, class_id: CLASS_ID })
 
   const { data: s2sub } = await s2.client.from('submissions').insert({
@@ -135,8 +138,18 @@ async function main() {
     expect(blocked, 'finalized 版本不可被覆盖', error ? error.message : `影响 ${data?.length ?? 0} 行`)
   }
 
-  // 清理测试任务（教师删除 draft 之外的用归档；此处直接删任务级联）
-  await teacher.client.from('tasks').delete().eq('id', task.id)
+  // 清理测试任务（try/finally，失败也执行）
+  } finally {
+    // published 任务受 tasks_delete(status='draft') 限制，教师无法删除；
+    // 用 service-role 兜底清理本次及遗留的 [E2E] 任务（级联删除 submission/version）。
+    if (CFG.secret && taskId) {
+      const admin = createClient(CFG.url, CFG.secret, { auth: { persistSession: false, autoRefreshToken: false } })
+      await admin.from('tasks').delete().eq('id', taskId)
+      await admin.from('tasks').delete().like('title', '[E2E]%')
+    } else if (!CFG.secret) {
+      log(true, '未配置 SUPABASE_SECRET_KEY：跳过 service-role 清理（可运行 npm run cleanup:e2e）')
+    }
+  }
 
   section('RLS 结果')
   console.log(failures === 0 ? '✅ 所有越权/提权测试全部符合预期' : `❌ 有 ${failures} 项不符合预期`)

@@ -15,7 +15,8 @@
     "test:e2e": "playwright test",
     "seed:users": "node --env-file=.env scripts/create-test-users.mjs",
     "test:cloud-flow": "node --env-file=.env scripts/e2e-cloud-flow.mjs",
-    "test:rls": "node --env-file=.env scripts/test-rls.mjs"
+    "test:rls": "node --env-file=.env scripts/test-rls.mjs",
+    "cleanup:e2e": "node --env-file=.env scripts/cleanup-e2e.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

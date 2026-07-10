@@ -7,7 +7,13 @@
  *
  * 流程：教师建/发任务 → 学生读/建/草稿/正式提交 → 教师批改/发布 → 学生查看结果
  * 同时用独立订阅端断言 Realtime 收到 submissions / grading_sessions / notifications 事件。
+ *
+ * 数据清理：所有测试数据使用 [E2E] 前缀；在 try/finally 中清理本次创建的
+ * task（级联删除 submission/version/grading）与 notification。
+ * 若配置了 SUPABASE_SECRET_KEY 则用 service-role 彻底清理（推荐，仅本地）；
+ * 否则尽力用教师/学生会话清理并提示。绝不删除种子或其他业务数据。
  */
+import { createClient } from '@supabase/supabase-js'
 import {
   assertConfig,
   signInAs,
@@ -15,6 +21,7 @@ import {
   section,
   log,
   waitFor,
+  CFG,
 } from './_shared.mjs'
 
 assertConfig()
@@ -29,10 +36,12 @@ function check(cond, msg) {
 }
 
 async function main() {
+  let teacher, student, taskId, chan
+  try {
   // ---------- 登录 ----------
   section('登录')
-  const teacher = await signInAs(ACCOUNTS.teacher)
-  const student = await signInAs(ACCOUNTS.student1)
+  teacher = await signInAs(ACCOUNTS.teacher)
+  student = await signInAs(ACCOUNTS.student1)
   check(!!teacher.user, `教师登录 ${ACCOUNTS.teacher}`)
   check(!!student.user, `学生登录 ${ACCOUNTS.student1}`)
 
@@ -45,7 +54,7 @@ async function main() {
   const events = { submissions: [], grading: [], notifications: [] }
   let subTargetId = null
 
-  const chan = student.client
+  chan = student.client
     .channel(`e2e-student-${stamp}`)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'submissions' }, (p) => {
       events.submissions.push({ t: Date.now(), event: p.eventType, status: p.new?.status })
@@ -67,7 +76,7 @@ async function main() {
 
   // ---------- 教师：创建并发布任务 ----------
   section('教师创建并发布任务')
-  const title = `E2E自动化任务-${stamp}`
+  const title = `[E2E] 自动化任务-${stamp}`
   const { data: task, error: taskErr } = await teacher.client
     .from('tasks')
     .insert({
@@ -82,7 +91,7 @@ async function main() {
     .select('*')
     .single()
   check(!taskErr && !!task, `创建任务 (${taskErr?.message ?? 'ok'})`)
-  const taskId = task.id
+  taskId = task.id
 
   await teacher.client.from('task_questions').insert([
     { task_id: taskId, order_no: 1, type: 'single', content: '1+1=? A.2 B.3', answer_key: 'A', score: 50 },
@@ -179,14 +188,36 @@ async function main() {
   console.log('  事件明细:', JSON.stringify(events))
   void subTargetId
 
-  await student.client.removeChannel(chan)
-
   // ---------- 汇总 ----------
   section('结果汇总')
   console.log(`task_id=${taskId}`)
   console.log(`submission_id=${submissionId}`)
   console.log(`final_status=graded, score=92`)
   console.log(failures === 0 ? '\n✅ 云端闭环全部通过' : `\n❌ 有 ${failures} 项失败`)
+  } finally {
+    // ---------- 清理测试数据（try/finally，失败也执行）----------
+    section('清理测试数据')
+    if (chan && student) await student.client.removeChannel(chan).catch(() => {})
+
+    if (CFG.secret) {
+      // service-role：彻底清理本次 [E2E] 任务（级联）与通知
+      const admin = createClient(CFG.url, CFG.secret, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      })
+      if (taskId) {
+        const delTask = await admin.from('tasks').delete().eq('id', taskId).select('id')
+        log(!delTask.error, `删除 [E2E] 任务及级联数据 (${delTask.error?.message ?? `${delTask.data?.length ?? 0} 行`})`)
+      }
+      // 兜底：清理所有遗留的 [E2E] 前缀任务与对应通知
+      const stale = await admin.from('tasks').delete().like('title', '[E2E]%').select('id')
+      log(!stale.error, `清理遗留 [E2E] 任务 (${stale.error?.message ?? `${stale.data?.length ?? 0} 行`})`)
+      const delNotif = await admin.from('notifications').delete().like('title', '%[E2E]%').select('id')
+      log(!delNotif.error, `清理 [E2E] 通知 (${delNotif.error?.message ?? `${delNotif.data?.length ?? 0} 行`})`)
+    } else {
+      log(true, '未配置 SUPABASE_SECRET_KEY：跳过 service-role 清理')
+      console.log('  提示：本地运行 `npm run cleanup:e2e`（需 .env 的 SUPABASE_SECRET_KEY）可彻底清理 [E2E] 数据。')
+    }
+  }
   process.exit(failures === 0 ? 0 : 1)
 }
 

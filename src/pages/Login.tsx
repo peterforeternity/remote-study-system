@@ -5,18 +5,19 @@ import { useAuthStore } from '@/store/useAuthStore'
 import { isSupabaseConfigured } from '@/lib/supabase'
 import { Button } from '@/components/ui/Button'
 
-// 种子测试账号，便于快速体验
+// 演示账号仅在开发环境展示，生产环境不暴露任何测试凭据
+const IS_DEV = import.meta.env.DEV
 const DEMO_ACCOUNTS = [
   { label: '教师', email: 'teacher@example.com' },
   { label: '学生', email: 'student1@example.com' },
-  { label: '管理员', email: 'admin@example.com' },
 ]
+const DEMO_PASSWORD = 'Passw0rd!'
 
 export default function Login() {
   const navigate = useNavigate()
   const { signIn, loading } = useAuthStore()
-  const [email, setEmail] = useState('teacher@example.com')
-  const [password, setPassword] = useState('Passw0rd!')
+  const [email, setEmail] = useState(IS_DEV ? 'teacher@example.com' : '')
+  const [password, setPassword] = useState(IS_DEV ? DEMO_PASSWORD : '')
   const [error, setError] = useState<string | null>(null)
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -90,23 +91,25 @@ export default function Login() {
           </Button>
         </form>
 
-        <div className="mt-6 border-t border-border pt-4">
-          <p className="mb-2 text-xs text-muted">测试账号（密码统一 Passw0rd!）：</p>
-          <div className="flex flex-wrap gap-2">
-            {DEMO_ACCOUNTS.map((a) => (
-              <button
-                key={a.email}
-                onClick={() => {
-                  setEmail(a.email)
-                  setPassword('Passw0rd!')
-                }}
-                className="rounded border border-border px-2.5 py-1 text-xs hover:bg-bg"
-              >
-                {a.label}
-              </button>
-            ))}
+        {IS_DEV && (
+          <div className="mt-6 border-t border-border pt-4">
+            <p className="mb-2 text-xs text-muted">测试账号（仅开发环境显示）：</p>
+            <div className="flex flex-wrap gap-2">
+              {DEMO_ACCOUNTS.map((a) => (
+                <button
+                  key={a.email}
+                  onClick={() => {
+                    setEmail(a.email)
+                    setPassword(DEMO_PASSWORD)
+                  }}
+                  className="rounded border border-border px-2.5 py-1 text-xs hover:bg-bg"
+                >
+                  {a.label}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   )

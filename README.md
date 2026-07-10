@@ -147,7 +147,10 @@ VITE_SUPABASE_PUBLISHABLE_KEY=你的Publishable Key
 
 ⚠️ Vercel 中**不要**填 `SUPABASE_SECRET_KEY` / `AI_API_KEY`（除非确有服务端函数且明确只跑在服务端）。
 
-## 测试账号（由 `npm run seed:users` 创建，密码统一 `Passw0rd!`）
+## 测试账号（仅本地/staging 使用）
+
+测试账号由 `npm run seed:users` 在**本地或 staging** 环境创建，**不应在生产环境执行**。
+密码通过脚本创建，请勿在生产 UI 或公开文档中暴露；生产环境请为管理员设置随机强密码或删除演示账号。
 
 | 角色 | 邮箱 |
 |------|------|
@@ -155,6 +158,8 @@ VITE_SUPABASE_PUBLISHABLE_KEY=你的Publishable Key
 | 学生 1 | student1@example.com |
 | 学生 2 | student2@example.com |
 | 管理员 | admin@example.com |
+
+> 生产部署（Vercel）不会执行 `seed:users`（该命令需 `SUPABASE_SECRET_KEY`，仅本地运行；构建命令为 `npm run build`，与 seed 无关）。
 
 ## 已实现的核心闭环
 
