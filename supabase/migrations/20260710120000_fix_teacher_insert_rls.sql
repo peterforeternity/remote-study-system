@@ -1,13 +1,10 @@
 -- ============================================================
 -- 20260710120000_fix_teacher_insert_rls.sql
--- 修复：教师创建 classes / tasks 时，虽然 INSERT 的 WITH CHECK 合法，
---       但 `INSERT ... RETURNING`（前端 .insert().select()）要求新行同时
---       通过 SELECT 策略；而 classes_select / tasks_select 未包含
---       "创建者本人可见"，导致新建行在 RETURNING 阶段不可见，
---       报 "new row violates row-level security policy"。
+-- 修复：云端缺失/非预期的 classes_insert 与 tasks_insert 策略，
+--       导致教师 INSERT 被 RLS 拒绝。幂等重建两条 insert 策略与依赖函数。
 --
---       实证：不带 RETURNING 的插入返回 201 成功；带 RETURNING 被拒。
---       因此需为 SELECT 策略补充 creator 可见分支。
+-- 注意：本文件已部署到云端。后续对 SELECT 策略的补充修复见
+--       20260710130000_fix_creator_select_rls.sql（新迁移，避免同名不重跑）。
 --
 -- 原则（与 20260710110100_rls_policies.sql 保持一致）：
 --   * 不关闭 RLS。
@@ -48,19 +45,3 @@ create policy tasks_insert on tasks for insert to authenticated
     and organization_id = auth_org_id()
     and creator_id = auth.uid()
   );
-
--- ---------- 修复 classes_select：补充"创建者本人可见" ----------
--- 使 INSERT ... RETURNING 能返回教师刚创建、尚无 class_members 的班级行。
-drop policy if exists classes_select on classes;
-create policy classes_select on classes for select to authenticated
-  using (
-    organization_id = auth_org_id()
-    and (is_admin() or created_by = auth.uid() or teaches_class(id) or in_class(id))
-  );
-
--- ---------- 修复 tasks_select：显式补充"创建者本人可见" ----------
--- 云端 can_view_task() 可能为旧版本，未含 creator 分支；此处在策略层显式加入，
--- 使教师创建任务后的 INSERT ... RETURNING 能返回新行。
-drop policy if exists tasks_select on tasks;
-create policy tasks_select on tasks for select to authenticated
-  using (creator_id = auth.uid() or can_view_task(id));
