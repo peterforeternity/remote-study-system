@@ -46,6 +46,28 @@ async function ensureOrg() {
   if (error) throw error
 }
 
+async function ensureSkills() {
+  const skills = [
+    { subject: '数学', name: '数学客观题评分' },
+    { subject: '英语', name: '英语作答评估' },
+    { subject: '编程', name: '代码作业评估' },
+    { subject: '语文', name: '语文主观题反馈' },
+  ]
+  // 幂等：先按机构清理再插入
+  await admin.from('subject_skills').delete().eq('organization_id', ORG_ID)
+  const { error } = await admin.from('subject_skills').insert(
+    skills.map((s) => ({
+      organization_id: ORG_ID,
+      subject: s.subject,
+      name: s.name,
+      version: '1.0.0',
+      enabled: true,
+    })),
+  )
+  if (error) throw error
+  console.log('✓ 科目技能已就绪（数学/英语/编程/语文）')
+}
+
 async function createUser(u) {
   // 1) 创建 auth 用户（已确认邮箱，可直接登录）
   const { data, error } = await admin.auth.admin.createUser({
@@ -142,6 +164,7 @@ async function ensureSampleTask(teacherId) {
 async function main() {
   console.log('创建测试用户中…')
   await ensureOrg()
+  await ensureSkills()
   const created = []
   for (const u of USERS) {
     created.push(await createUser(u))
