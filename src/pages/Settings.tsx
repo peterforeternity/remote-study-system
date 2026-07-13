@@ -1,6 +1,7 @@
 import { Check, Palette } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { InviteCodesCard } from '@/components/InviteCodesCard'
 import { useThemeStore, THEMES } from '@/store/useThemeStore'
 import { useAuthStore } from '@/store/useAuthStore'
 import { cn } from '@/lib/utils'
@@ -8,6 +9,7 @@ import { cn } from '@/lib/utils'
 export default function Settings() {
   const { theme, setTheme } = useThemeStore()
   const { profile } = useAuthStore()
+  const canManageInvites = profile?.role === 'teacher' || profile?.role === 'admin'
 
   return (
     <div>
@@ -74,6 +76,12 @@ export default function Settings() {
           </CardBody>
         </Card>
       </div>
+
+      {canManageInvites && (
+        <div className="mt-6">
+          <InviteCodesCard />
+        </div>
+      )}
     </div>
   )
 }

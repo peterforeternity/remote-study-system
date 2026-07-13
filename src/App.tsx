@@ -5,6 +5,7 @@ import { useAuthStore } from '@/store/useAuthStore'
 import { useThemeStore, applyTheme } from '@/store/useThemeStore'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import Login from '@/pages/Login'
+import Register from '@/pages/Register'
 import Dashboard from '@/pages/Dashboard'
 import Tasks from '@/pages/Tasks'
 import TaskDetail from '@/pages/TaskDetail'
@@ -39,6 +40,7 @@ export default function App() {
       <Router>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
           <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
           <Route path="/tasks" element={<ProtectedRoute><Tasks /></ProtectedRoute>} />
           <Route path="/tasks/:taskId" element={<ProtectedRoute><TaskDetail /></ProtectedRoute>} />

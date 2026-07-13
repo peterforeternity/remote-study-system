@@ -19,9 +19,8 @@ interface AuthState {
     email: string
     password: string
     name: string
-    role: 'teacher' | 'student'
-    organizationId: string
-  }) => Promise<void>
+    inviteCode: string
+  }) => Promise<{ needsConfirmation: boolean }>
   signOut: () => Promise<void>
   refreshProfile: () => Promise<void>
 }
@@ -77,29 +76,25 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  signUp: async ({ email, password, name, role, organizationId }) => {
+  signUp: async ({ email, password, name, inviteCode }) => {
     set({ loading: true })
     try {
-      const { data, error } = await supabase.auth.signUp({ email, password })
+      // 角色与机构由后端触发器根据邀请码决定（强制学生角色，杜绝提权）。
+      // profile 由触发器 handle_new_user 自动创建，前端不再写入 profiles。
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { data: { name, invite_code: inviteCode } },
+      })
       if (error) throw error
-      const user = data.user
-      if (user) {
-        // 创建对应 profile（RLS 要求 id = auth.uid()）
-        const { error: pErr } = await supabase.from('profiles').insert({
-          id: user.id,
-          organization_id: organizationId,
-          name,
-          role,
-          email,
-        })
-        if (pErr) throw pErr
+
+      // 若开启邮箱确认，signUp 后无 session，需用户确认邮件后再登录。
+      const needsConfirmation = !data.session
+      if (data.session?.user) {
+        const profile = await loadProfile(data.session.user.id)
+        set({ session: data.session, profile })
       }
-      // 若开启邮箱确认，此处 session 可能为空，需用户确认后再登录
-      const { data: sess } = await supabase.auth.getSession()
-      const profile = sess.session?.user
-        ? await loadProfile(sess.session.user.id)
-        : null
-      set({ session: sess.session, profile })
+      return { needsConfirmation }
     } finally {
       set({ loading: false })
     }

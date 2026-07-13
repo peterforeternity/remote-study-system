@@ -1,23 +1,15 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { GraduationCap, AlertCircle } from 'lucide-react'
 import { useAuthStore } from '@/store/useAuthStore'
 import { isSupabaseConfigured } from '@/lib/supabase'
 import { Button } from '@/components/ui/Button'
 
-// 演示账号仅在开发环境展示，生产环境不暴露任何测试凭据
-const IS_DEV = import.meta.env.DEV
-const DEMO_ACCOUNTS = [
-  { label: '教师', email: 'teacher@example.com' },
-  { label: '学生', email: 'student1@example.com' },
-]
-const DEMO_PASSWORD = 'Passw0rd!'
-
 export default function Login() {
   const navigate = useNavigate()
   const { signIn, loading } = useAuthStore()
-  const [email, setEmail] = useState(IS_DEV ? 'teacher@example.com' : '')
-  const [password, setPassword] = useState(IS_DEV ? DEMO_PASSWORD : '')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -91,25 +83,12 @@ export default function Login() {
           </Button>
         </form>
 
-        {IS_DEV && (
-          <div className="mt-6 border-t border-border pt-4">
-            <p className="mb-2 text-xs text-muted">测试账号（仅开发环境显示）：</p>
-            <div className="flex flex-wrap gap-2">
-              {DEMO_ACCOUNTS.map((a) => (
-                <button
-                  key={a.email}
-                  onClick={() => {
-                    setEmail(a.email)
-                    setPassword(DEMO_PASSWORD)
-                  }}
-                  className="rounded border border-border px-2.5 py-1 text-xs hover:bg-bg"
-                >
-                  {a.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
+        <p className="mt-6 text-center text-sm text-muted">
+          还没有账号？{' '}
+          <Link to="/register" className="text-primary hover:underline">
+            使用邀请码注册
+          </Link>
+        </p>
       </div>
     </div>
   )

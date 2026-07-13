@@ -57,6 +57,18 @@ export interface Profile {
   created_at: string
 }
 
+export interface InviteCode {
+  id: string
+  code: string
+  organization_id: string
+  created_by: string
+  max_uses: number | null
+  used_count: number
+  expires_at: string | null
+  active: boolean
+  created_at: string
+}
+
 export interface Class {
   id: string
   organization_id: string
