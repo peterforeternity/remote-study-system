@@ -10,6 +10,7 @@ import Tasks from '@/pages/Tasks'
 import TaskDetail from '@/pages/TaskDetail'
 import Assignments from '@/pages/Assignments'
 import AssignmentDetail from '@/pages/AssignmentDetail'
+import GradingCenter from '@/pages/GradingCenter'
 import Grading from '@/pages/Grading'
 import LearningPath from '@/pages/LearningPath'
 import Skills from '@/pages/Skills'
@@ -43,6 +44,7 @@ export default function App() {
           <Route path="/tasks/:taskId" element={<ProtectedRoute><TaskDetail /></ProtectedRoute>} />
           <Route path="/assignments" element={<ProtectedRoute><Assignments /></ProtectedRoute>} />
           <Route path="/assignments/:submissionId" element={<ProtectedRoute><AssignmentDetail /></ProtectedRoute>} />
+          <Route path="/grading" element={<ProtectedRoute><GradingCenter /></ProtectedRoute>} />
           <Route path="/grading/:submissionId" element={<ProtectedRoute><Grading /></ProtectedRoute>} />
           <Route path="/learning-path" element={<ProtectedRoute><LearningPath /></ProtectedRoute>} />
           <Route path="/skills" element={<ProtectedRoute><Skills /></ProtectedRoute>} />

@@ -31,6 +31,7 @@ const QUESTION_TYPES: { value: QuestionType; label: string }[] = [
   { value: 'blank', label: '填空题' },
   { value: 'numeric', label: '数值题' },
   { value: 'subjective', label: '主观题' },
+  { value: 'dictation', label: '听写题' },
 ]
 
 export function TaskFormModal({ onClose }: { onClose: () => void }) {
@@ -39,7 +40,7 @@ export function TaskFormModal({ onClose }: { onClose: () => void }) {
   const createTask = useCreateTask()
   const [error, setError] = useState<string | null>(null)
 
-  const { register, control, handleSubmit } = useForm<FormValues>({
+  const { register, control, handleSubmit, watch } = useForm<FormValues>({
     defaultValues: {
       title: '',
       subject: '数学',
@@ -70,7 +71,12 @@ export function TaskFormModal({ onClose }: { onClose: () => void }) {
           order_no: i + 1,
           type: q.type,
           content: q.content,
-          answer_key: q.type === 'subjective' ? null : q.answer_key || null,
+          answer_key:
+            q.type === 'subjective'
+              ? null
+              : q.type === 'dictation'
+                ? q.answer_key || q.content // 听写题标准答案默认等于朗读词
+                : q.answer_key || null,
           score: Number(q.score),
         })),
       })
@@ -189,12 +195,20 @@ export function TaskFormModal({ onClose }: { onClose: () => void }) {
                   </div>
                   <input
                     {...register(`questions.${index}.content`)}
-                    placeholder="题干内容"
+                    placeholder={
+                      watch(`questions.${index}.type`) === 'dictation'
+                        ? '听写内容（朗读给学生的词/句，如 elephant）'
+                        : '题干内容'
+                    }
                     className="mb-2 w-full rounded border border-border bg-bg px-2 py-1.5 text-sm"
                   />
                   <input
                     {...register(`questions.${index}.answer_key`)}
-                    placeholder="标准答案（主观题可留空）"
+                    placeholder={
+                      watch(`questions.${index}.type`) === 'dictation'
+                        ? '标准答案（留空则默认与听写内容相同）'
+                        : '标准答案（主观题可留空）'
+                    }
                     className="w-full rounded border border-border bg-bg px-2 py-1.5 text-sm"
                   />
                 </div>

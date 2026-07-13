@@ -28,6 +28,7 @@ export type QuestionType =
   | 'blank'
   | 'numeric'
   | 'subjective'
+  | 'dictation'
 
 export type ErrorSeverity = 'minor' | 'major' | 'critical'
 
@@ -258,5 +259,24 @@ export interface LearningAssessmentRow {
   progress_score: number
   competency: Record<string, number>
   weak_areas: string[]
+  created_at: string
+}
+
+/** 防作弊行为事件类型。 */
+export type SubmissionEventType =
+  | 'blur'
+  | 'visibility_hidden'
+  | 'paste_blocked'
+  | 'copy_blocked'
+  | 'fullscreen_exit'
+  | 'auto_submit_timeout'
+
+export interface SubmissionEvent {
+  id: string
+  submission_id: string
+  student_id: string
+  organization_id: string
+  event_type: SubmissionEventType
+  detail: Record<string, unknown> | null
   created_at: string
 }

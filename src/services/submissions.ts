@@ -51,6 +51,26 @@ export async function listTaskSubmissions(
   return (data as unknown as SubmissionWithStudent[]) ?? []
 }
 
+export interface PendingGrading extends SubmissionWithStudent {
+  task?: { id: string; title: string; subject: string }
+}
+
+/**
+ * 批改中心：列出教师名下所有待批改/批改中的提交。
+ * RLS 保证只返回教师可管理任务的提交（can_manage_task）。
+ */
+export async function listPendingGradings(): Promise<PendingGrading[]> {
+  const { data, error } = await supabase
+    .from('submissions')
+    .select(
+      '*, student:profiles!submissions_student_id_fkey(id, name, email), task:tasks!submissions_task_id_fkey(id, title, subject)',
+    )
+    .in('status', ['submitted', 'grading', 'resubmitted', 'graded', 'returned'])
+    .order('updated_at', { ascending: false })
+  if (error) throw error
+  return (data as unknown as PendingGrading[]) ?? []
+}
+
 /** 创建作业（草稿）。 */
 export async function createSubmission(params: {
   taskId: string

@@ -10,6 +10,8 @@ import { useSubmission } from '@/hooks/useSubmissions'
 import { useTask } from '@/hooks/useTasks'
 import { useSubmissionRealtime } from '@/hooks/useRealtime'
 import { useAuthStore } from '@/store/useAuthStore'
+import { listSubmissionEvents } from '@/services/antiCheat'
+import type { SubmissionEventType } from '@/types'
 import {
   getOrCreateGrading,
   saveGradingDraft,
@@ -18,6 +20,15 @@ import {
   getLatestFinalizedVersion,
 } from '@/services/grading'
 import type { GradingSession } from '@/types'
+
+const EVENT_LABELS: Record<SubmissionEventType, string> = {
+  blur: '窗口失焦/切屏',
+  visibility_hidden: '切换标签页',
+  paste_blocked: '尝试粘贴（已拦截）',
+  copy_blocked: '尝试复制（已拦截）',
+  fullscreen_exit: '退出全屏',
+  auto_submit_timeout: '超时自动提交',
+}
 
 export default function Grading() {
   const { submissionId } = useParams<{ submissionId: string }>()
@@ -36,6 +47,12 @@ export default function Grading() {
   const version = useQuery({
     queryKey: ['grading-version', submissionId],
     queryFn: () => getLatestFinalizedVersion(submissionId!),
+    enabled: Boolean(submissionId),
+  })
+
+  const events = useQuery({
+    queryKey: ['submission-events', submissionId],
+    queryFn: () => listSubmissionEvents(submissionId!),
     enabled: Boolean(submissionId),
   })
 
@@ -157,6 +174,37 @@ export default function Grading() {
               </div>
             ) : (
               <p className="text-sm text-muted">学生尚未正式提交。</p>
+            )}
+          </CardBody>
+        </Card>
+
+        {/* 监考行为记录 */}
+        <Card>
+          <CardBody>
+            <h2 className="mb-2 font-display font-semibold">监考行为记录</h2>
+            {events.isLoading ? (
+              <p className="text-sm text-muted">加载中…</p>
+            ) : (events.data?.length ?? 0) === 0 ? (
+              <p className="text-sm text-success">未检测到异常行为。</p>
+            ) : (
+              <div>
+                <p className="mb-2 text-sm text-danger">
+                  共 {events.data!.length} 条异常行为记录
+                </p>
+                <ul className="max-h-48 space-y-1 overflow-auto text-sm">
+                  {events.data!.map((ev) => (
+                    <li
+                      key={ev.id}
+                      className="flex items-center justify-between rounded border border-border px-2 py-1"
+                    >
+                      <span>{EVENT_LABELS[ev.event_type] ?? ev.event_type}</span>
+                      <span className="text-xs text-muted">
+                        {new Date(ev.created_at).toLocaleTimeString()}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
           </CardBody>
         </Card>
