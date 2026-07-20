@@ -82,6 +82,7 @@ export interface CreateTaskInput {
     answer_key: string | null
     score: number
   }[]
+  resources?: { title: string; url: string }[]
 }
 
 /** 创建任务（含题目与班级分配）。默认草稿状态。 */
@@ -115,6 +116,18 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
       .from('task_assignees')
       .insert({ task_id: created.id, class_id: input.classId })
     if (aErr) throw aErr
+  }
+
+  if (input.resources && input.resources.length > 0) {
+    const { error: rErr } = await supabase.from('task_resources').insert(
+      input.resources.map((r) => ({
+        task_id: created.id,
+        title: r.title,
+        url: r.url,
+        type: 'link',
+      })),
+    )
+    if (rErr) throw rErr
   }
 
   return created

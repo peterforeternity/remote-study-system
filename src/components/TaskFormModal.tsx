@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { X, Plus, Trash2 } from 'lucide-react'
+import { X, Plus, Trash2, ExternalLink } from 'lucide-react'
 import { useForm, useFieldArray } from 'react-hook-form'
 import { Button } from '@/components/ui/Button'
 import { useCreateTask } from '@/hooks/useTasks'
@@ -14,6 +14,11 @@ interface QuestionField {
   score: number
 }
 
+interface ResourceField {
+  title: string
+  url: string
+}
+
 interface FormValues {
   title: string
   subject: string
@@ -22,6 +27,7 @@ interface FormValues {
   fullScore: number
   classId: string
   questions: QuestionField[]
+  resources: ResourceField[]
 }
 
 const QUESTION_TYPES: { value: QuestionType; label: string }[] = [
@@ -49,10 +55,12 @@ export function TaskFormModal({ onClose }: { onClose: () => void }) {
       fullScore: 100,
       classId: '',
       questions: [{ type: 'single', content: '', answer_key: '', score: 100 }],
+      resources: [],
     },
   })
 
   const { fields, append, remove } = useFieldArray({ control, name: 'questions' })
+  const { fields: resourceFields, append: appendResource, remove: removeResource } = useFieldArray({ control, name: 'resources' })
 
   const onSubmit = async (values: FormValues) => {
     setError(null)
@@ -75,10 +83,13 @@ export function TaskFormModal({ onClose }: { onClose: () => void }) {
             q.type === 'subjective'
               ? null
               : q.type === 'dictation'
-                ? q.answer_key || q.content // 听写题标准答案默认等于朗读词
+                ? q.answer_key || q.content
                 : q.answer_key || null,
           score: Number(q.score),
         })),
+        resources: values.resources
+          .filter((r) => r.title && r.url)
+          .map((r) => ({ title: r.title, url: r.url })),
       })
       onClose()
     } catch (err) {
@@ -217,6 +228,45 @@ export function TaskFormModal({ onClose }: { onClose: () => void }) {
           </div>
 
           {error && <p className="text-sm text-danger">{error}</p>}
+
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <label className="text-sm font-medium flex items-center gap-1.5">
+                <ExternalLink size={14} /> 参考资料
+              </label>
+              <button
+                type="button"
+                onClick={() => appendResource({ title: '', url: '' })}
+                className="flex items-center gap-1 text-sm text-primary"
+              >
+                <Plus size={14} /> 添加链接
+              </button>
+            </div>
+            <p className="mb-2 text-xs text-muted">添加学生可查看的参考链接（可选）</p>
+            <div className="space-y-2">
+              {resourceFields.map((field, index) => (
+                <div key={field.id} className="flex items-center gap-2">
+                  <input
+                    {...register(`resources.${index}.title`)}
+                    placeholder="链接标题（如：课本第三章PPT）"
+                    className="flex-1 rounded border border-border bg-bg px-2 py-1.5 text-sm"
+                  />
+                  <input
+                    {...register(`resources.${index}.url`)}
+                    placeholder="https://..."
+                    className="flex-[2] rounded border border-border bg-bg px-2 py-1.5 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeResource(index)}
+                    className="text-danger shrink-0"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
 
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="secondary" onClick={onClose}>
