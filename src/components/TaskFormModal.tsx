@@ -1,10 +1,11 @@
-import { useState } from 'react'
-import { X, Plus, Trash2, ExternalLink } from 'lucide-react'
+import { useState, useRef } from 'react'
+import { X, Plus, Trash2, ExternalLink, Upload, FileText, Loader2 } from 'lucide-react'
 import { useForm, useFieldArray } from 'react-hook-form'
 import { Button } from '@/components/ui/Button'
 import { useCreateTask } from '@/hooks/useTasks'
 import { useMyClasses } from '@/hooks/useClasses'
 import { useAuthStore } from '@/store/useAuthStore'
+import { supabase } from '@/lib/supabase'
 import type { QuestionType } from '@/types'
 
 interface QuestionField {
@@ -45,6 +46,9 @@ export function TaskFormModal({ onClose }: { onClose: () => void }) {
   const classes = useMyClasses()
   const createTask = useCreateTask()
   const [error, setError] = useState<string | null>(null)
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const { register, control, handleSubmit, watch } = useForm<FormValues>({
     defaultValues: {
@@ -66,7 +70,7 @@ export function TaskFormModal({ onClose }: { onClose: () => void }) {
     setError(null)
     if (!profile) return
     try {
-      await createTask.mutateAsync({
+      const task = await createTask.mutateAsync({
         organizationId: profile.organization_id,
         creatorId: profile.id,
         title: values.title,
@@ -91,8 +95,42 @@ export function TaskFormModal({ onClose }: { onClose: () => void }) {
           .filter((r) => r.title && r.url)
           .map((r) => ({ title: r.title, url: r.url })),
       })
+
+      // 上传文件到 Storage
+      if (selectedFiles.length > 0) {
+        setUploading(true)
+        const prefix = `${profile.organization_id}/tasks/${task.id}/resources`
+        const fileRecords: { title: string; url: string; type: string }[] = []
+
+        for (const file of selectedFiles) {
+          const safeName = file.name.replace(/[^a-zA-Z0-9._\-\u4e00-\u9fff]/g, '_')
+          const path = `${prefix}/${safeName}`
+          const { error: upErr } = await supabase.storage
+            .from('task-resources')
+            .upload(path, file, { upsert: false })
+          if (upErr) throw upErr
+
+          const { data: urlData } = supabase.storage
+            .from('task-resources')
+            .getPublicUrl(path)
+          fileRecords.push({
+            title: file.name,
+            url: urlData.publicUrl,
+            type: 'file',
+          })
+        }
+
+        // 保存文件记录到 task_resources
+        const { error: rErr } = await supabase.from('task_resources').insert(
+          fileRecords.map((r) => ({ ...r, task_id: task.id })),
+        )
+        if (rErr) throw rErr
+        setUploading(false)
+      }
+
       onClose()
     } catch (err) {
+      setUploading(false)
       setError(err instanceof Error ? err.message : '创建任务失败')
     }
   }
@@ -268,12 +306,64 @@ export function TaskFormModal({ onClose }: { onClose: () => void }) {
             </div>
           </div>
 
+          <div>
+            <label className="mb-2 flex items-center gap-1.5 text-sm font-medium">
+              <Upload size={14} /> 附件上传
+            </label>
+            <p className="mb-2 text-xs text-muted">上传教学资料（PDF/文档/图片等），学生可下载查看</p>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? [])
+                setSelectedFiles((prev) => [...prev, ...files])
+                if (fileInputRef.current) fileInputRef.current.value = ''
+              }}
+              className="hidden"
+            />
+
+            {selectedFiles.length > 0 && (
+              <ul className="mb-2 space-y-1">
+                {selectedFiles.map((f, i) => (
+                  <li key={i} className="flex items-center justify-between rounded border border-border px-2 py-1.5 text-sm">
+                    <span className="flex items-center gap-1.5 truncate">
+                      <FileText size={14} className="text-muted shrink-0" />
+                      <span className="truncate">{f.name}</span>
+                      <span className="text-xs text-muted shrink-0">
+                        ({(f.size / 1024).toFixed(0)} KB)
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFiles((prev) => prev.filter((_, j) => j !== i))}
+                      className="ml-2 text-danger shrink-0"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-1.5 rounded border border-dashed border-border px-3 py-2 text-sm text-muted hover:border-primary hover:text-primary"
+            >
+              <Plus size={14} /> 选择文件
+            </button>
+          </div>
+
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="secondary" onClick={onClose}>
               取消
             </Button>
-            <Button type="submit" disabled={createTask.isPending}>
-              {createTask.isPending ? '创建中…' : '创建草稿'}
+            <Button type="submit" disabled={createTask.isPending || uploading}>
+              {createTask.isPending ? '创建中…' : uploading ? (
+                <span className="flex items-center gap-1"><Loader2 size={14} className="animate-spin" /> 上传文件中…</span>
+              ) : '创建草稿'}
             </Button>
           </div>
         </form>
