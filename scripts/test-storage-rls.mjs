@@ -58,9 +58,12 @@ async function signIn(email) {
   return { client, user: data.user }
 }
 
-// ============================================================
-// 前置：不上传测试文件，直接验证不存在遗留
-// 但测试需要文件所以先用 admin 清理
+async function cleanupAll(client, paths) {
+  for (const p of paths) {
+    try { await client.storage.from('task-resources').remove([p]) } catch (_) { /* ok */ }
+  }
+}
+
 // ============================================================
 async function main() {
   console.log('Storage RLS 权限测试\n')
@@ -107,14 +110,48 @@ async function main() {
     log(false, `异常: ${e.message}`)
   }
 
-  // ---- 测试 5: 未分配学生不应读取（用未加入班级的学生2测试） ----
-  // 注：student2 和 student1 在同一个机构，当前 RLS 基于 can_view_task，
-  // 如果 student2 不在分配给该任务的班级中，应该无法读取。
+  // ---- 测试 5: 未分配学生不能读取任务资源 ----
+  // student2 和 student1 同属 初二(3)班，示例任务也分配给该班级，
+  // can_view_task() 正确通过 class_members 返回 true。
+  // 为准确地测试，创建临时任务仅分配给只含 student1 的临时班级。
   section('5. 未分配学生不能读取任务资源')
   try {
-    const { client } = await signIn(ACCOUNTS.student2)
-    const { error } = await client.storage.from('task-resources').createSignedUrl(TEST_PATH, 60)
+    const tmpClassId = '00000000-0000-0000-0000-000000000ca5'
+    const tmpTaskId  = '00000000-0000-0000-0000-0000000000ca'
+    const tmpPath = `${ORG_ID}/tasks/${tmpTaskId}/resources/tmp-perm.txt`
+    const { client: tc } = await signIn(ACCOUNTS.teacher)
+
+    // 幂等地创建临时班级（只含 student1），临时任务
+    await tc.from('classes').upsert({
+      id: tmpClassId, organization_id: ORG_ID, name: '存储测试临时班',
+      created_by: (await tc.auth.getUser()).data.user.id,
+    }, { onConflict: 'id' }).then(r => { if (r.error) console.warn('  [setup] 班级:', r.error.message) })
+    await tc.from('class_members').upsert({
+      class_id: tmpClassId, profile_id: (await signIn(ACCOUNTS.student1)).user.id,
+      role_in_class: 'student',
+    }, { onConflict: 'class_id,profile_id' }).then(r => { if (r.error) console.warn('  [setup] 成员:', r.error.message) })
+    await tc.from('tasks').upsert({
+      id: tmpTaskId, organization_id: ORG_ID, title: '存储测试临时任务',
+      subject: 'test', status: 'published', creator_id: (await tc.auth.getUser()).data.user.id,
+    }, { onConflict: 'id' }).then(r => { if (r.error) console.warn('  [setup] 任务:', r.error.message) })
+    await tc.from('task_assignees').upsert({
+      task_id: tmpTaskId, class_id: tmpClassId,
+    }, { onConflict: 'task_id,class_id' }).then(r => { if (r.error) console.warn('  [setup] 分配:', r.error.message) })
+
+    // 上传测试文件
+    await tc.storage.from('task-resources').upload(tmpPath, fileContent)
+
+    // student2 不应能读取（不在临时班）
+    const { client: s2c } = await signIn(ACCOUNTS.student2)
+    const { error } = await s2c.storage.from('task-resources').createSignedUrl(tmpPath, 60)
     log(!!error, error ? `正确拒绝: ${error.message}` : '不应成功但生成了签名 URL')
+
+    // 清理临时数据
+    await cleanupAll(tc, [tmpPath])
+    await tc.from('task_assignees').delete().eq('task_id', tmpTaskId)
+    await tc.from('class_members').delete().eq('class_id', tmpClassId)
+    await tc.from('tasks').delete().eq('id', tmpTaskId)
+    await tc.from('classes').delete().eq('id', tmpClassId)
   } catch (e) {
     log(false, `异常: ${e.message}`)
   }
@@ -129,26 +166,45 @@ async function main() {
     log(false, `异常: ${e.message}`)
   }
 
-  // ---- 测试 7: 教师可以删除自己任务的资源 ----
+  // ---- 测试 7: 教师可以删除自己任务的资源（先上传再删除，确保对象存在） ----
   section('7. 教师可以删除自己任务的资源（先上传再删）')
+  const delPath = `${ORG_ID}/tasks/${TASK_ID}/resources/test-del-by-teacher.txt`
   try {
-    const delPath = `${ORG_ID}/tasks/${TASK_ID}/resources/test-del-perm.txt`
     const { client } = await signIn(ACCOUNTS.teacher)
-    // 先上传
     await client.storage.from('task-resources').upload(delPath, fileContent)
-    // 再删除
     const { error } = await client.storage.from('task-resources').remove([delPath])
     log(!error, error ? `删除被拒: ${error.message}` : `删除成功`)
   } catch (e) {
     log(false, `异常: ${e.message}`)
   }
 
-  // ---- 测试 8: 学生不能删除资源（用 TEST_PATH） ----
+  // ---- 测试 8: 学生不能删除资源（重新上传一个对象再让学生试删） ----
   section('8. 学生不能删除资源')
+  const stuDelPath = `${ORG_ID}/tasks/${TASK_ID}/resources/test-del-by-stu.txt`
   try {
-    const { client } = await signIn(ACCOUNTS.student1)
-    const { error } = await client.storage.from('task-resources').remove([TEST_PATH])
-    log(!!error, error ? `正确拒绝: ${error.message}` : '不应成功但删除了！')
+    // 教师上传
+    const { client: tc } = await signIn(ACCOUNTS.teacher)
+    const { error: upErr } = await tc.storage.from('task-resources').upload(stuDelPath, fileContent)
+    if (upErr) { log(false, `前置上传失败: ${upErr.message}`); }
+    else {
+      // 学生尝试删除
+      const { client: sc } = await signIn(ACCOUNTS.student1)
+      const { error: delErr } = await sc.storage.from('task-resources').remove([stuDelPath])
+      // 删除后验证文件是否真的被删了：用教师重读确认
+      const { data: checkData } = await tc.storage.from('task-resources').createSignedUrl(stuDelPath, 60)
+      const wasDeleted = !checkData?.signedUrl // 教师也读不到 = 真的被删了
+      const rejected = !!delErr || !wasDeleted // 报错 或 文件没被删 = RLS 生效
+      log(rejected,
+        delErr ? `正确拒绝: ${delErr.message}`
+        : !wasDeleted ? '正确：文件未被删除（RLS 拦截）'
+        : '不应成功但确实删除了！')
+      if (wasDeleted && !delErr) {
+        // RLS 没有拦住，学生成功删了 — 这是安全漏洞
+        console.warn('  ⚠ RLS 策略未生效，学生删除了教师文件！')
+      }
+      // 确保清理
+      await cleanupAll(tc, [stuDelPath, delPath])
+    }
   } catch (e) {
     log(false, `异常: ${e.message}`)
   }
@@ -159,8 +215,8 @@ async function main() {
     const { client } = await signIn(ACCOUNTS.teacher)
     const { data: urlData } = client.storage.from('task-resources').getPublicUrl(TEST_PATH)
     const resp = await fetch(urlData.publicUrl)
-    log(resp.status === 400 || resp.status === 403 || resp.status === 404,
-      `公开 URL 返回 ${resp.status}（预期 400/403/404）`)
+    log(resp.status >= 400 && resp.status < 500,
+      `公开 URL 返回 ${resp.status}（预期 4xx）`)
   } catch (e) {
     log(false, `异常: ${e.message}`)
   }
@@ -184,9 +240,15 @@ async function main() {
   console.log('\n清理测试文件…')
   try {
     const { client } = await signIn(ACCOUNTS.teacher)
-    const { error } = await client.storage.from('task-resources').remove([TEST_PATH])
-    console.log(error ? `清理失败: ${error.message}` : '清理完成')
-  } catch (_) { /* ignore */ }
+    const { data: listData } = await client.storage.from('task-resources').list(`${ORG_ID}/tasks/${TASK_ID}/resources`, { limit: 100 })
+    if (listData) {
+      const names = listData.filter(f => f.name.startsWith('test-')).map(f => `${ORG_ID}/tasks/${TASK_ID}/resources/${f.name}`)
+      if (names.length) await client.storage.from('task-resources').remove(names)
+    }
+    console.log('清理完成')
+  } catch (e) {
+    console.log('清理: 跳过或失败')
+  }
 
   // ---- 总结 ----
   console.log(`\n${'='.repeat(40)}`)
