@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { ArrowLeft, ExternalLink, FileText } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ExternalLink, FileText } from 'lucide-react'
 
 import { supabase } from '@/lib/supabase'
 import { PageHeader } from '@/components/PageHeader'
@@ -21,20 +21,27 @@ export default function TaskDetail() {
   const questions = useTaskQuestions(taskId, isTeacher)
   const resources = useTaskResources(taskId)
   const [signedUrls, setSignedUrls] = useState<Record<string, string>>({})
+  const [signedError, setSignedError] = useState<string | null>(null)
 
   // 为文件类资源生成签名 URL（私有桶不支持公开 URL，需 5 分钟有效签名）
   useEffect(() => {
     const fileResources = (resources.data ?? []).filter((r) => r.type === 'file')
     if (fileResources.length === 0) return
+    setSignedError(null)
     let cancelled = false
     async function signAll() {
       const map: Record<string, string> = {}
       for (const r of fileResources) {
         if (cancelled) return
-        const { data } = await supabase.storage
-          .from('task-resources')
-          .createSignedUrl(r.url, 300)
-        if (data) map[r.id] = data.signedUrl
+        try {
+          const { data, error } = await supabase.storage
+            .from('task-resources')
+            .createSignedUrl(r.url, 300)
+          if (data) map[r.id] = data.signedUrl
+          else if (error) setSignedError(error.message)
+        } catch {
+          /* 单个签名失败不影响其他 */
+        }
       }
       if (!cancelled) setSignedUrls((prev) => ({ ...prev, ...map }))
     }
@@ -58,8 +65,21 @@ export default function TaskDetail() {
     navigate(`/assignments/${sub.id}`)
   }
 
-  if (task.isLoading) return <p className="text-sm text-muted">加载中…</p>
-  if (!task.data) return <p className="text-sm text-muted">任务不存在或无权访问。</p>
+  if (task.isLoading) return <p className="p-4 text-sm text-muted">加载中…</p>
+  if (task.isError || !task.data) {
+    return (
+      <div className="flex flex-col items-center gap-4 p-12">
+        <AlertTriangle size={40} className="text-warning" />
+        <h2 className="font-display text-lg font-semibold">任务不存在或无权访问</h2>
+        <p className="text-sm text-muted">
+          {!isTeacher ? '该任务可能未分配给你，请联系老师确认。' : '任务可能已被删除。'}
+        </p>
+        <Button onClick={() => navigate(isTeacher ? '/tasks' : '/assignments')}>
+          返回列表
+        </Button>
+      </div>
+    )
+  }
 
   return (
     <div>
@@ -117,27 +137,34 @@ export default function TaskDetail() {
               {(resources.data ?? []).length === 0 ? (
                 <p className="text-sm text-muted">暂无资源</p>
               ) : (
-                <ul className="space-y-2">
-                  {(resources.data ?? []).map((r) => {
-                    const href = r.type === 'file' ? signedUrls[r.id] : r.url
-                    if (!href) return null
-                    return (
-                      <li key={r.id}>
-                        <a
-                          href={href}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="flex items-center gap-1.5 text-sm text-primary hover:underline"
-                        >
-                          {r.type === 'file'
-                            ? <FileText size={14} />
-                            : <ExternalLink size={14} />}
-                          {' '}{r.title}
-                        </a>
-                      </li>
-                    )
-                  })}
-                </ul>
+                <>
+                  {signedError && (
+                    <p className="mb-2 flex items-center gap-1 text-xs text-warning">
+                      <AlertTriangle size={12} /> 部分文件签名失败: {signedError}
+                    </p>
+                  )}
+                  <ul className="space-y-2">
+                    {(resources.data ?? []).map((r) => {
+                      const href = r.type === 'file' ? signedUrls[r.id] : r.url
+                      if (!href) return null
+                      return (
+                        <li key={r.id}>
+                          <a
+                            href={href}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex items-center gap-1.5 text-sm text-primary hover:underline"
+                          >
+                            {r.type === 'file'
+                              ? <FileText size={14} />
+                              : <ExternalLink size={14} />}
+                            {' '}{r.title}
+                          </a>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </>
               )}
             </CardBody>
           </Card>
