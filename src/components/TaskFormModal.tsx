@@ -145,7 +145,7 @@ export function TaskFormModal({ onClose, task, editQuestions, editResources, edi
         taskId = created.id
       }
 
-      // 上传文件到 Storage
+      // 上传文件到 Storage（私有桶，前端只存 object_path，展示时生成签名 URL）
       if (selectedFiles.length > 0) {
         setUploading(true)
         const prefix = `${profile.organization_id}/tasks/${taskId}/resources`
@@ -153,18 +153,16 @@ export function TaskFormModal({ onClose, task, editQuestions, editResources, edi
 
         for (const file of selectedFiles) {
           const safeName = file.name.replace(/[^a-zA-Z0-9._\-\u4e00-\u9fff]/g, '_')
-          const path = `${prefix}/${safeName}`
+          const uuidPart = crypto.randomUUID().slice(0, 8)
+          const objectPath = `${prefix}/${uuidPart}-${safeName}`
           const { error: upErr } = await supabase.storage
             .from('task-resources')
-            .upload(path, file, { upsert: false })
+            .upload(objectPath, file, { upsert: false })
           if (upErr) throw upErr
 
-          const { data: urlData } = supabase.storage
-            .from('task-resources')
-            .getPublicUrl(path)
           fileRecords.push({
             title: file.name,
-            url: urlData.publicUrl,
+            url: objectPath,
             type: 'file',
           })
         }

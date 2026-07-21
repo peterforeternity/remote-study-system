@@ -1,5 +1,8 @@
+import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { ArrowLeft, ExternalLink } from 'lucide-react'
+import { ArrowLeft, ExternalLink, FileText } from 'lucide-react'
+
+import { supabase } from '@/lib/supabase'
 import { PageHeader } from '@/components/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -17,6 +20,27 @@ export default function TaskDetail() {
   const task = useTask(taskId)
   const questions = useTaskQuestions(taskId, isTeacher)
   const resources = useTaskResources(taskId)
+  const [signedUrls, setSignedUrls] = useState<Record<string, string>>({})
+
+  // 为文件类资源生成签名 URL（私有桶不支持公开 URL，需 5 分钟有效签名）
+  useEffect(() => {
+    const fileResources = (resources.data ?? []).filter((r) => r.type === 'file')
+    if (fileResources.length === 0) return
+    let cancelled = false
+    async function signAll() {
+      const map: Record<string, string> = {}
+      for (const r of fileResources) {
+        if (cancelled) return
+        const { data } = await supabase.storage
+          .from('task-resources')
+          .createSignedUrl(r.url, 300)
+        if (data) map[r.id] = data.signedUrl
+      }
+      if (!cancelled) setSignedUrls((prev) => ({ ...prev, ...map }))
+    }
+    signAll()
+    return () => { cancelled = true }
+  }, [resources.data])
   const submissions = useTaskSubmissions(isTeacher ? taskId : undefined)
   const mySubmission = useMySubmission(
     !isTeacher ? taskId : undefined,
@@ -94,18 +118,25 @@ export default function TaskDetail() {
                 <p className="text-sm text-muted">暂无资源</p>
               ) : (
                 <ul className="space-y-2">
-                  {(resources.data ?? []).map((r) => (
-                    <li key={r.id}>
-                      <a
-                        href={r.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="flex items-center gap-1.5 text-sm text-primary hover:underline"
-                      >
-                        <ExternalLink size={14} /> {r.title}
-                      </a>
-                    </li>
-                  ))}
+                  {(resources.data ?? []).map((r) => {
+                    const href = r.type === 'file' ? signedUrls[r.id] : r.url
+                    if (!href) return null
+                    return (
+                      <li key={r.id}>
+                        <a
+                          href={href}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center gap-1.5 text-sm text-primary hover:underline"
+                        >
+                          {r.type === 'file'
+                            ? <FileText size={14} />
+                            : <ExternalLink size={14} />}
+                          {' '}{r.title}
+                        </a>
+                      </li>
+                    )
+                  })}
                 </ul>
               )}
             </CardBody>

@@ -58,5 +58,17 @@ allowed_mime_types = [
   "application/zip",
 ]
 
+# 私有任务资源桶（教师上传，有权学生读取；签名 URL 访问）
+[storage.buckets.task-resources]
+public = false
+file_size_limit = "20MiB"
+allowed_mime_types = [
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "text/plain",
+]
+
 [edge_runtime]
 enabled = true
