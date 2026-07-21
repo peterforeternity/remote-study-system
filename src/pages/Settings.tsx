@@ -2,6 +2,7 @@ import { Check, Palette } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { InviteCodesCard } from '@/components/InviteCodesCard'
+import { ClassManageCard } from '@/components/ClassManageCard'
 import { useThemeStore, THEMES } from '@/store/useThemeStore'
 import { useAuthStore } from '@/store/useAuthStore'
 import { cn } from '@/lib/utils'
@@ -78,9 +79,14 @@ export default function Settings() {
       </div>
 
       {canManageInvites && (
-        <div className="mt-6">
-          <InviteCodesCard />
-        </div>
+        <>
+          <div className="mt-6">
+            <ClassManageCard />
+          </div>
+          <div className="mt-6">
+            <InviteCodesCard />
+          </div>
+        </>
       )}
     </div>
   )
