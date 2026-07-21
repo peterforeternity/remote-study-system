@@ -7,7 +7,9 @@ import {
   getTaskResources,
   createTask,
   updateTaskStatus,
+  updateTask,
   type CreateTaskInput,
+  type UpdateTaskInput,
 } from '@/services/tasks'
 import type { TaskStatus } from '@/types'
 
@@ -61,6 +63,20 @@ export function useUpdateTaskStatus() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['tasks'] })
       qc.invalidateQueries({ queryKey: ['task'] })
+    },
+  })
+}
+
+export function useUpdateTask() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (params: { taskId: string; input: UpdateTaskInput }) =>
+      updateTask(params.taskId, params.input),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tasks'] })
+      qc.invalidateQueries({ queryKey: ['task'] })
+      qc.invalidateQueries({ queryKey: ['task-questions'] })
+      qc.invalidateQueries({ queryKey: ['task-resources'] })
     },
   })
 }

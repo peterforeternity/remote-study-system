@@ -144,3 +144,70 @@ export async function updateTaskStatus(
     .eq('id', taskId)
   if (error) throw error
 }
+
+export interface UpdateTaskInput {
+  title: string
+  description: string
+  subject: string
+  dueDate: string | null
+  fullScore: number
+  classId: string | null
+  questions: {
+    order_no: number
+    type: TaskQuestion['type']
+    content: string
+    answer_key: string | null
+    score: number
+  }[]
+  resources?: { title: string; url: string }[]
+}
+
+/** 编辑草稿任务。仅 draft 状态可编辑；更新元信息、题目、班级分配和链接资源。 */
+export async function updateTask(taskId: string, input: UpdateTaskInput): Promise<Task> {
+  // 1. 更新任务元信息
+  const { data, error } = await supabase
+    .from('tasks')
+    .update({
+      title: input.title,
+      description: input.description,
+      subject: input.subject,
+      due_date: input.dueDate,
+      full_score: input.fullScore,
+    })
+    .eq('id', taskId)
+    .select('*')
+    .single()
+  if (error) throw error
+  const updated = data as Task
+
+  // 2. 替换题目（删除旧的，插入新的）
+  await supabase.from('task_questions').delete().eq('task_id', taskId)
+  if (input.questions.length > 0) {
+    const { error: qErr } = await supabase.from('task_questions').insert(
+      input.questions.map((q) => ({ ...q, task_id: taskId })),
+    )
+    if (qErr) throw qErr
+  }
+
+  // 3. 替换班级分配
+  await supabase.from('task_assignees').delete().eq('task_id', taskId)
+  if (input.classId) {
+    await supabase.from('task_assignees').insert({ task_id: taskId, class_id: input.classId })
+  }
+
+  // 4. 替换链接资源
+  await supabase.from('task_resources').delete().eq('task_id', taskId).eq('type', 'link')
+  if (input.resources && input.resources.length > 0) {
+    const { error: rErr } = await supabase.from('task_resources').insert(
+      input.resources.map((r) => ({
+        task_id: taskId,
+        title: r.title,
+        url: r.url,
+        type: 'link',
+      })),
+    )
+    if (rErr) throw rErr
+  }
+
+  return updated
+}

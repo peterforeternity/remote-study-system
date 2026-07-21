@@ -1,8 +1,8 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { X, Plus, Trash2, ExternalLink, Upload, FileText, Loader2 } from 'lucide-react'
 import { useForm, useFieldArray } from 'react-hook-form'
 import { Button } from '@/components/ui/Button'
-import { useCreateTask } from '@/hooks/useTasks'
+import { useCreateTask, useUpdateTask } from '@/hooks/useTasks'
 import { useMyClasses } from '@/hooks/useClasses'
 import { useAuthStore } from '@/store/useAuthStore'
 import { supabase } from '@/lib/supabase'
@@ -41,16 +41,36 @@ const QUESTION_TYPES: { value: QuestionType; label: string }[] = [
   { value: 'dictation', label: '听写题' },
 ]
 
-export function TaskFormModal({ onClose }: { onClose: () => void }) {
+interface TaskFormModalProps {
+  onClose: () => void
+  /** 编辑模式：要编辑的任务基本信息 */
+  task?: {
+    id: string
+    title: string
+    description: string
+    subject: string
+    due_date: string | null
+    full_score: number
+  }
+  editQuestions?: QuestionField[]
+  editResources?: ResourceField[]
+  editClassId?: string
+}
+
+const defaultQuestion = (): QuestionField => ({ type: 'single', content: '', answer_key: '', score: 100 })
+
+export function TaskFormModal({ onClose, task, editQuestions, editResources, editClassId }: TaskFormModalProps) {
+  const isEdit = Boolean(task)
   const { profile } = useAuthStore()
   const classes = useMyClasses()
   const createTask = useCreateTask()
+  const updateTask = useUpdateTask()
   const [error, setError] = useState<string | null>(null)
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const { register, control, handleSubmit, watch } = useForm<FormValues>({
+  const { register, control, handleSubmit, watch, reset } = useForm<FormValues>({
     defaultValues: {
       title: '',
       subject: '数学',
@@ -58,7 +78,7 @@ export function TaskFormModal({ onClose }: { onClose: () => void }) {
       dueDate: '',
       fullScore: 100,
       classId: '',
-      questions: [{ type: 'single', content: '', answer_key: '', score: 100 }],
+      questions: [defaultQuestion()],
       resources: [],
     },
   })
@@ -66,40 +86,69 @@ export function TaskFormModal({ onClose }: { onClose: () => void }) {
   const { fields, append, remove } = useFieldArray({ control, name: 'questions' })
   const { fields: resourceFields, append: appendResource, remove: removeResource } = useFieldArray({ control, name: 'resources' })
 
+  // 编辑模式：预填充任务数据
+  useEffect(() => {
+    if (task) {
+      reset({
+        title: task.title,
+        subject: task.subject,
+        description: task.description,
+        dueDate: task.due_date ? new Date(task.due_date).toISOString().slice(0, 16) : '',
+        fullScore: task.full_score,
+        classId: editClassId ?? '',
+        questions: (editQuestions && editQuestions.length > 0) ? editQuestions : [defaultQuestion()],
+        resources: editResources ?? [],
+      })
+    }
+  }, [task, editQuestions, editResources, editClassId, reset])
+
+  const buildSubmitPayload = (values: FormValues) => ({
+    title: values.title,
+    description: values.description,
+    subject: values.subject,
+    dueDate: values.dueDate ? new Date(values.dueDate).toISOString() : null,
+    fullScore: Number(values.fullScore),
+    classId: values.classId || null,
+    questions: values.questions.map((q, i) => ({
+      order_no: i + 1,
+      type: q.type,
+      content: q.content,
+      answer_key:
+        q.type === 'subjective'
+          ? null
+          : q.type === 'dictation'
+            ? q.answer_key || q.content
+            : q.answer_key || null,
+      score: Number(q.score),
+    })),
+    resources: values.resources
+      .filter((r) => r.title && r.url)
+      .map((r) => ({ title: r.title, url: r.url })),
+  })
+
   const onSubmit = async (values: FormValues) => {
     setError(null)
     if (!profile) return
     try {
-      const task = await createTask.mutateAsync({
-        organizationId: profile.organization_id,
-        creatorId: profile.id,
-        title: values.title,
-        description: values.description,
-        subject: values.subject,
-        dueDate: values.dueDate ? new Date(values.dueDate).toISOString() : null,
-        fullScore: Number(values.fullScore),
-        classId: values.classId || null,
-        questions: values.questions.map((q, i) => ({
-          order_no: i + 1,
-          type: q.type,
-          content: q.content,
-          answer_key:
-            q.type === 'subjective'
-              ? null
-              : q.type === 'dictation'
-                ? q.answer_key || q.content
-                : q.answer_key || null,
-          score: Number(q.score),
-        })),
-        resources: values.resources
-          .filter((r) => r.title && r.url)
-          .map((r) => ({ title: r.title, url: r.url })),
-      })
+      const payload = buildSubmitPayload(values)
+
+      let taskId: string
+      if (isEdit && task) {
+        const updated = await updateTask.mutateAsync({ taskId: task.id, input: payload })
+        taskId = updated.id
+      } else {
+        const created = await createTask.mutateAsync({
+          organizationId: profile.organization_id,
+          creatorId: profile.id,
+          ...payload,
+        })
+        taskId = created.id
+      }
 
       // 上传文件到 Storage
       if (selectedFiles.length > 0) {
         setUploading(true)
-        const prefix = `${profile.organization_id}/tasks/${task.id}/resources`
+        const prefix = `${profile.organization_id}/tasks/${taskId}/resources`
         const fileRecords: { title: string; url: string; type: string }[] = []
 
         for (const file of selectedFiles) {
@@ -120,9 +169,8 @@ export function TaskFormModal({ onClose }: { onClose: () => void }) {
           })
         }
 
-        // 保存文件记录到 task_resources
         const { error: rErr } = await supabase.from('task_resources').insert(
-          fileRecords.map((r) => ({ ...r, task_id: task.id })),
+          fileRecords.map((r) => ({ ...r, task_id: taskId })),
         )
         if (rErr) throw rErr
         setUploading(false)
@@ -131,7 +179,7 @@ export function TaskFormModal({ onClose }: { onClose: () => void }) {
       onClose()
     } catch (err) {
       setUploading(false)
-      setError(err instanceof Error ? err.message : '创建任务失败')
+      setError(err instanceof Error ? err.message : (isEdit ? '保存修改失败' : '创建任务失败'))
     }
   }
 
@@ -139,7 +187,9 @@ export function TaskFormModal({ onClose }: { onClose: () => void }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-lg border border-border bg-surface shadow-soft">
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
-          <h2 className="font-display text-lg font-semibold">创建学习任务</h2>
+          <h2 className="font-display text-lg font-semibold">
+            {isEdit ? '编辑学习任务' : '创建学习任务'}
+          </h2>
           <button onClick={onClose} className="text-muted hover:text-fg">
             <X size={20} />
           </button>
@@ -360,10 +410,15 @@ export function TaskFormModal({ onClose }: { onClose: () => void }) {
             <Button type="button" variant="secondary" onClick={onClose}>
               取消
             </Button>
-            <Button type="submit" disabled={createTask.isPending || uploading}>
-              {createTask.isPending ? '创建中…' : uploading ? (
-                <span className="flex items-center gap-1"><Loader2 size={14} className="animate-spin" /> 上传文件中…</span>
-              ) : '创建草稿'}
+            <Button type="submit" disabled={createTask.isPending || updateTask.isPending || uploading}>
+              {createTask.isPending || updateTask.isPending
+                ? (isEdit ? '保存中…' : '创建中…')
+                : uploading
+                  ? (
+                    <span className="flex items-center gap-1"><Loader2 size={14} className="animate-spin" /> 上传文件中…</span>
+                  )
+                  : (isEdit ? '保存修改' : '创建草稿')
+              }
             </Button>
           </div>
         </form>

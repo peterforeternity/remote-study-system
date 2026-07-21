@@ -1,14 +1,16 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, FolderPlus } from 'lucide-react'
+import { Plus, FolderPlus, Pencil } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { TaskStatusBadge } from '@/components/ui/StatusBadge'
 import { TaskFormModal } from '@/components/TaskFormModal'
-import { useTeacherTasks, useUpdateTaskStatus } from '@/hooks/useTasks'
+import { useTeacherTasks, useUpdateTaskStatus, useTaskQuestions, useTaskResources } from '@/hooks/useTasks'
 import { useMyClasses, useCreateClass } from '@/hooks/useClasses'
 import { useAuthStore } from '@/store/useAuthStore'
+import { supabase } from '@/lib/supabase'
+import type { Task } from '@/types'
 
 export default function Tasks() {
   const { profile } = useAuthStore()
@@ -17,7 +19,25 @@ export default function Tasks() {
   const createClass = useCreateClass()
   const updateStatus = useUpdateTaskStatus()
   const [showTaskModal, setShowTaskModal] = useState(false)
+  const [editingTask, setEditingTask] = useState<Task | null>(null)
+  const [editClassId, setEditClassId] = useState('')
   const [newClassName, setNewClassName] = useState('')
+
+  // 编辑模式下加载任务详情
+  const { data: editQuestions } = useTaskQuestions(editingTask?.id, true)
+  const { data: editResources } = useTaskResources(editingTask?.id)
+
+  // 加载编辑任务的班级分配
+  useEffect(() => {
+    if (!editingTask) return
+    supabase
+      .from('task_assignees')
+      .select('class_id')
+      .eq('task_id', editingTask.id)
+      .maybeSingle()
+      .then(({ data }) => setEditClassId(data?.class_id ?? ''))
+    return () => setEditClassId('')
+  }, [editingTask])
 
   const handleCreateClass = async () => {
     if (!profile || !newClassName.trim()) return
@@ -28,6 +48,27 @@ export default function Tasks() {
     })
     setNewClassName('')
   }
+
+  const handleEdit = (t: Task) => {
+    setEditingTask(t)
+    setShowTaskModal(true)
+  }
+
+  const handleCloseModal = () => {
+    setShowTaskModal(false)
+    setEditingTask(null)
+  }
+
+  // 从 task_resources + task_assignees 提取链接资源和班级 ID
+  const mappedQuestions = editQuestions?.map((q) => ({
+    type: q.type,
+    content: q.content,
+    answer_key: q.answer_key ?? '',
+    score: q.score,
+  }))
+  const mappedResources = (editResources ?? [])
+    .filter((r) => r.type === 'link')
+    .map((r) => ({ title: r.title, url: r.url }))
 
   return (
     <div>
@@ -96,15 +137,24 @@ export default function Tasks() {
                     </div>
                     <TaskStatusBadge status={t.status} />
                     {t.status === 'draft' && (
-                      <Button
-                        variant="secondary"
-                        className="px-2 py-1 text-xs"
-                        onClick={() =>
-                          updateStatus.mutate({ taskId: t.id, status: 'published' })
-                        }
-                      >
-                        发布
-                      </Button>
+                      <>
+                        <Button
+                          variant="ghost"
+                          className="px-2 py-1 text-xs"
+                          onClick={() => handleEdit(t)}
+                        >
+                          <Pencil size={12} className="mr-1" /> 编辑
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          className="px-2 py-1 text-xs"
+                          onClick={() =>
+                            updateStatus.mutate({ taskId: t.id, status: 'published' })
+                          }
+                        >
+                          发布
+                        </Button>
+                      </>
                     )}
                     {t.status === 'published' && (
                       <Button
@@ -125,7 +175,15 @@ export default function Tasks() {
         </Card>
       </div>
 
-      {showTaskModal && <TaskFormModal onClose={() => setShowTaskModal(false)} />}
+      {showTaskModal && (
+        <TaskFormModal
+          onClose={handleCloseModal}
+          task={editingTask ?? undefined}
+          editQuestions={editingTask ? mappedQuestions : undefined}
+          editResources={editingTask ? mappedResources : undefined}
+          editClassId={editingTask ? editClassId : undefined}
+        />
+      )}
     </div>
   )
 }
