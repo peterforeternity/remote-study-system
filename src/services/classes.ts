@@ -57,7 +57,7 @@ export async function listClassMembers(classId: string): Promise<(ClassMember & 
     .select('*, profiles:profile_id(*)')
     .eq('class_id', classId)
   if (error) throw error
-  return (data as any[]) ?? []
+  return (data as unknown as (ClassMember & { profiles: Profile })[]) ?? []
 }
 
 /** 添加学生到班级。 */

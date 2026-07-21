@@ -26,9 +26,15 @@ supabase/.temp
 
 # Test / build artifacts
 coverage
-playwright-report
-test-results
+playwright-report/
+test-results/
+blob-report/
 dev-dist
+
+# Playwright — 不提交截图、视频、trace、浏览器登录状态、临时报告
+.auth/
+tests/.auth/
+*.webm
 
 # Editor directories and files
 .vscode/*
