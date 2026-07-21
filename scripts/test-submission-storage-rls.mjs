@@ -168,12 +168,22 @@ async function main() {
     )
 
     // 2) 学生不能直接修改 current_version_id
+    // 使用真实存在的 version ID（来自同一 submission 的其他 version 或其他 submission）
+    // 避免用随机 UUID 得到的外键 violation 被误判为安全通过
+    const { data: extraVer } = await s2.client.from('submission_versions')
+      .insert({
+        submission_id: s2SubId, version_no: 99, text_answer: 'fake version for test',
+        finalized: false, created_by: s2.user.id,
+      }).select('id').single()
+    const realVersionId = extraVer?.id
+    if (!realVersionId) { console.log('  [skip] test 2 setup failed'); }
     const r2 = await s1.client.from('submissions')
-      .update({ current_version_id: '00000000-0000-0000-0000-0000000000ff' }).eq('id', s1SubId).select('id,current_version_id')
+      .update({ current_version_id: realVersionId }).eq('id', s1SubId).select('id,current_version_id')
+    // 期望：保护触发器拒绝（不应是 FK violation）
     const blocked2 = r2.error || (r2.data?.length ?? 0) === 0
     result(
       blocked2,
-      `2. 学生修改 current_version_id 被拒${r2.error ? ` (${r2.error.message})` : ` (影响 ${r2.data?.length ?? 0} 行)`}`
+      `2. 学生修改 current_version_id → 真实 versionId 被拒${r2.error ? ` (${r2.error.message})` : ` (影响 ${r2.data?.length ?? 0} 行)`}`
     )
 
     // 3) 学生不能直接修改 submission.version
