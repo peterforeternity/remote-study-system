@@ -12,12 +12,17 @@ values ('task-resources', 'task-resources', false)
 on conflict (id) do update set public = false;
 
 -- 删除旧策略（来自 20260720000000 和 20260720000001）
-drop policy if exists "task_resources upload" on storage.objects;
-drop policy if exists "task_resources read"  on storage.objects;
-drop policy if exists "task_resources select" on storage.objects;
-drop policy if exists "task_resources insert" on storage.objects;
-drop policy if exists "task_resources update" on storage.objects;
-drop policy if exists "task_resources delete" on storage.objects;
+-- 同时删除本迁移自身的策略名，保证幂等（重复执行不报错）
+drop policy if exists "task_resources upload"   on storage.objects;
+drop policy if exists "task_resources read"    on storage.objects;
+drop policy if exists "task_resources select"  on storage.objects;
+drop policy if exists "task_resources insert"  on storage.objects;
+drop policy if exists "task_resources update"  on storage.objects;
+drop policy if exists "task_resources delete"  on storage.objects;
+drop policy if exists "task_resources_insert"  on storage.objects;
+drop policy if exists "task_resources_select"  on storage.objects;
+drop policy if exists "task_resources_update"  on storage.objects;
+drop policy if exists "task_resources_delete"  on storage.objects;
 
 -- -----------------------------------------------------------
 -- INSERT: 仅任务管理者（创建者/管理员）可上传
