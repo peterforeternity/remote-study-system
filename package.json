@@ -19,6 +19,7 @@
     "test:rls": "node --env-file=.env scripts/test-rls.mjs",
     "test:signup": "node --env-file=.env scripts/test-signup.mjs",
     "test:storage-rls": "node --env-file=.env scripts/test-storage-rls.mjs",
+    "test:submission-storage-rls": "node --env-file=.env scripts/test-submission-storage-rls.mjs",
     "cleanup:e2e": "node --env-file=.env scripts/cleanup-e2e.mjs"
   },
   "dependencies": {
