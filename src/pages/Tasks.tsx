@@ -9,8 +9,8 @@ import { TaskFormModal } from '@/components/TaskFormModal'
 import { useTeacherTasks, useUpdateTaskStatus, useTaskQuestions, useTaskResources } from '@/hooks/useTasks'
 import { useMyClasses, useCreateClass } from '@/hooks/useClasses'
 import { useAuthStore } from '@/store/useAuthStore'
+import { useTaskFormStore } from '@/store/useTaskFormStore'
 import { supabase } from '@/lib/supabase'
-import type { Task } from '@/types'
 
 export default function Tasks() {
   const { profile } = useAuthStore()
@@ -18,8 +18,7 @@ export default function Tasks() {
   const classes = useMyClasses()
   const createClass = useCreateClass()
   const updateStatus = useUpdateTaskStatus()
-  const [showTaskModal, setShowTaskModal] = useState(false)
-  const [editingTask, setEditingTask] = useState<Task | null>(null)
+  const { open, editingTask, openCreate, openEdit, close } = useTaskFormStore()
   const [editClassId, setEditClassId] = useState('')
   const [newClassName, setNewClassName] = useState('')
 
@@ -49,16 +48,6 @@ export default function Tasks() {
     setNewClassName('')
   }
 
-  const handleEdit = (t: Task) => {
-    setEditingTask(t)
-    setShowTaskModal(true)
-  }
-
-  const handleCloseModal = () => {
-    setShowTaskModal(false)
-    setEditingTask(null)
-  }
-
   // 从 task_resources + task_assignees 提取链接资源和班级 ID
   const mappedQuestions = editQuestions?.map((q) => ({
     type: q.type,
@@ -76,7 +65,7 @@ export default function Tasks() {
         title="任务管理"
         subtitle="创建、发布与归档学习任务"
         action={
-          <Button onClick={() => setShowTaskModal(true)}>
+          <Button onClick={openCreate}>
             <Plus size={16} /> 新建任务
           </Button>
         }
@@ -141,7 +130,7 @@ export default function Tasks() {
                         <Button
                           variant="ghost"
                           className="px-2 py-1 text-xs"
-                          onClick={() => handleEdit(t)}
+                          onClick={() => openEdit(t)}
                         >
                           <Pencil size={12} className="mr-1" /> 编辑
                         </Button>
@@ -175,9 +164,9 @@ export default function Tasks() {
         </Card>
       </div>
 
-      {showTaskModal && (
+      {open && (
         <TaskFormModal
-          onClose={handleCloseModal}
+          onClose={close}
           task={editingTask ?? undefined}
           editQuestions={editingTask ? mappedQuestions : undefined}
           editResources={editingTask ? mappedResources : undefined}
