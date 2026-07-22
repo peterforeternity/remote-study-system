@@ -165,9 +165,18 @@ async function main() {
       if (s1DraftVer && !s1DraftVer.finalized && s1DraftVer.id !== s1VerId) {
         s1DraftVerId = s1DraftVer.id
         console.log(`  [setup] 为 s1 创建新 draft (id=${s1DraftVerId})`)
+      } else {
+        console.log(`  [setup] 创建 s1 draft 未获新版本: data=${JSON.stringify(s1DraftVer)}`)
       }
     } catch (e) {
       console.log(`  [setup] 创建 s1 draft 失败: ${e.message}`)
+    }
+
+    // 诊断：确认 draft 的 created_by
+    if (s1DraftVerId) {
+      const { data: diag } = await s1.client.from('submission_versions')
+        .select('id,created_by,finalized,version_no').eq('id', s1DraftVerId).single()
+      console.log(`  [diag] draft 详情: id=${diag?.id}, created_by=${diag?.created_by}, finalized=${diag?.finalized}, version_no=${diag?.version_no}`)
     }
 
     // ============================================================
