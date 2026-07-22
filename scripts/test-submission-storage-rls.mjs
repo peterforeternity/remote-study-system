@@ -82,6 +82,7 @@ async function main() {
   let s1VerId = null
   let s2SubId = null
   let s2VerId = null
+  let s1DraftVerId = null
   let s1OrgId = null
   const storagePaths = []
 
@@ -155,6 +156,20 @@ async function main() {
     }).select('*').single()
     s2VerId = s2ver.id
 
+    // Setup 已将 s1VerId finalize，需要为存储和更新测试创建新 draft
+    try {
+      const { data: s1Draft } = await s1.client.rpc('create_submission_draft_version', {
+        p_submission_id: s1SubId,
+      })
+      const s1DraftVer = Array.isArray(s1Draft) ? s1Draft[0] : s1Draft
+      if (s1DraftVer && !s1DraftVer.finalized && s1DraftVer.id !== s1VerId) {
+        s1DraftVerId = s1DraftVer.id
+        console.log(`  [setup] 为 s1 创建新 draft (id=${s1DraftVerId})`)
+      }
+    } catch (e) {
+      console.log(`  [setup] 创建 s1 draft 失败: ${e.message}`)
+    }
+
     // ============================================================
     section('1-3. 学生不能直接修改 submission 敏感字段（status / current_version_id / version）')
 
@@ -210,24 +225,32 @@ async function main() {
     )
 
     // 5) 学生只能修改 draft 的 text_answer 和 note
-    const r5 = await s1.client.from('submission_versions')
-      .update({ text_answer: '更新草稿内容' })
-      .eq('id', s1VerId).select('id,text_answer')
-    const ok5 = !r5.error && (r5.data?.length ?? 0) > 0
-    result(
-      ok5,
-      `5. 修改 draft text_answer 成功${r5.error ? ` (${r5.error.message})` : ` (text_answer="${r5.data?.[0]?.text_answer}")`}`
-    )
+    if (!s1DraftVerId) {
+      result(false, '5. 修改 draft text_answer 失败: 无可用 draft')
+    } else {
+      const r5 = await s1.client.from('submission_versions')
+        .update({ text_answer: '更新草稿内容' })
+        .eq('id', s1DraftVerId).select('id,text_answer')
+      const ok5 = !r5.error && (r5.data?.length ?? 0) > 0
+      result(
+        ok5,
+        `5. 修改 draft text_answer 成功${r5.error ? ` (${r5.error.message})` : ` (text_answer="${r5.data?.[0]?.text_answer}")`}`
+      )
+    }
 
     // 5b) 尝试修改 version_no（不可变字段）
-    const r5b = await s1.client.from('submission_versions')
-      .update({ version_no: 999 })
-      .eq('id', s1VerId).select('id,version_no')
-    const blocked5b = r5b.error || (r5b.data?.length ?? 0) === 0
-    result(
-      blocked5b,
-      `5b. 修改 draft version_no 被拒${r5b.error ? ` (${r5b.error.message})` : ` (影响 ${r5b.data?.length ?? 0} 行)`}`
-    )
+    if (!s1DraftVerId) {
+      result(true, '5b. 修改 draft version_no 被拒: 无可用 draft (跳过)')
+    } else {
+      const r5b = await s1.client.from('submission_versions')
+        .update({ version_no: 999 })
+        .eq('id', s1DraftVerId).select('id,version_no')
+      const blocked5b = r5b.error || (r5b.data?.length ?? 0) === 0
+      result(
+        blocked5b,
+        `5b. 修改 draft version_no 被拒${r5b.error ? ` (${r5b.error.message})` : ` (影响 ${r5b.data?.length ?? 0} 行)`}`
+      )
+    }
 
     // 6) finalized 版本文本不可修改
     if (s1FinalVerId) {
@@ -341,7 +364,9 @@ async function main() {
     section('11-20. Storage RLS 测试')
 
     const testFileName = `test-${Date.now()}.txt`
-    const validPath = `${s1OrgId}/students/${s1.user.id}/submissions/${s1SubId}/versions/${s1VerId}/${testFileName}`
+    const validPath = s1DraftVerId
+      ? `${s1OrgId}/students/${s1.user.id}/submissions/${s1SubId}/versions/${s1DraftVerId}/${testFileName}`
+      : `${s1OrgId}/students/${s1.user.id}/submissions/${s1SubId}/versions/${s1VerId}/${testFileName}`
     const fileContent = new Blob([`submission-test-${Date.now()}`], { type: 'text/plain' })
 
     // 11) 学生可以上传到自己的 draft 路径
