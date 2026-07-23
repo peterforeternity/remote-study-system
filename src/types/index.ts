@@ -164,6 +164,20 @@ export interface SubmissionFile {
   sha256: string
   scan_status: string
   created_at: string
+  // 新增字段（迁移 20260721000001 添加）
+  organization_id?: string
+  submission_id?: string
+  bucket?: string
+  created_by?: string
+}
+
+export interface FileUploadState {
+  file: File
+  progress: number // 0-100，基于已上传字节数
+  sha256: string | null
+  objectKey: string | null
+  error: string | null
+  status: 'pending' | 'hashing' | 'uploading' | 'done' | 'error'
 }
 
 export interface GradingSession {

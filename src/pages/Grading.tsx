@@ -1,17 +1,17 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Download, Eye, File, FileText, Image, X } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { SubmissionStatusBadge } from '@/components/ui/StatusBadge'
-import { useSubmission } from '@/hooks/useSubmissions'
+import { useSubmission, useSubmissionFiles } from '@/hooks/useSubmissions'
 import { useTask } from '@/hooks/useTasks'
 import { useSubmissionRealtime } from '@/hooks/useRealtime'
 import { useAuthStore } from '@/store/useAuthStore'
 import { listSubmissionEvents } from '@/services/antiCheat'
-import type { SubmissionEventType } from '@/types'
+import type { SubmissionEventType, SubmissionFile } from '@/types'
 import {
   getOrCreateGrading,
   saveGradingDraft,
@@ -20,6 +20,7 @@ import {
   getLatestFinalizedVersion,
 } from '@/services/grading'
 import type { GradingSession } from '@/types'
+import { createSignedFileUrl, isImageFile, isPdfFile, formatFileSize } from '@/services/submissions'
 
 const EVENT_LABELS: Record<SubmissionEventType, string> = {
   blur: '窗口失焦/切屏',
@@ -28,6 +29,12 @@ const EVENT_LABELS: Record<SubmissionEventType, string> = {
   copy_blocked: '尝试复制（已拦截）',
   fullscreen_exit: '退出全屏',
   auto_submit_timeout: '超时自动提交',
+}
+
+function FileIcon({ file }: { file: SubmissionFile }) {
+  if (file.mime_type.startsWith('image/')) return <Image size={14} />
+  if (file.mime_type === 'application/pdf') return <FileText size={14} />
+  return <File size={14} />
 }
 
 export default function Grading() {
@@ -44,11 +51,19 @@ export default function Grading() {
   const [msg, setMsg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  // 文件相关状态
+  const [signedUrls, setSignedUrls] = useState<Record<string, string>>({})
+  const [previewFile, setPreviewFile] = useState<SubmissionFile | null>(null)
+  const [loadingUrls, setLoadingUrls] = useState<Set<string>>(new Set())
+
   const version = useQuery({
     queryKey: ['grading-version', submissionId],
     queryFn: () => getLatestFinalizedVersion(submissionId!),
     enabled: Boolean(submissionId),
   })
+
+  // 获取当前版本的文件列表
+  const files = useSubmissionFiles(version.data?.id)
 
   const events = useQuery({
     queryKey: ['submission-events', submissionId],
@@ -136,6 +151,37 @@ export default function Grading() {
     }
   }
 
+  // ========== 文件操作 ==========
+
+  const handleGetSignedUrl = async (f: SubmissionFile) => {
+    if (signedUrls[f.id]) return signedUrls[f.id]
+    setLoadingUrls((prev) => new Set(prev).add(f.id))
+    try {
+      const url = await createSignedFileUrl(f.object_key, 300)
+      setSignedUrls((prev) => ({ ...prev, [f.id]: url }))
+      return url
+    } catch {
+      setMsg('无法生成下载链接')
+      return null
+    } finally {
+      setLoadingUrls((prev) => {
+        const next = new Set(prev)
+        next.delete(f.id)
+        return next
+      })
+    }
+  }
+
+  const handlePreview = async (f: SubmissionFile) => {
+    const url = await handleGetSignedUrl(f)
+    if (url) setPreviewFile(f)
+  }
+
+  const handleDownload = async (f: SubmissionFile) => {
+    const url = await handleGetSignedUrl(f)
+    if (url) window.open(url, '_blank')
+  }
+
   if (submission.isLoading) return <p className="text-sm text-muted">加载中…</p>
   if (!submission.data) return <p className="text-sm text-muted">作业不存在或无权访问。</p>
 
@@ -171,6 +217,56 @@ export default function Grading() {
                 <div className="whitespace-pre-wrap rounded border border-border bg-bg p-3 text-sm">
                   {version.data.text_answer || '（无文本作答）'}
                 </div>
+
+                {/* 学生上传的文件 */}
+                {files.data && files.data.length > 0 && (
+                  <div className="mt-3 border-t border-border pt-3">
+                    <h3 className="mb-2 text-sm font-medium">提交文件</h3>
+                    <ul className="space-y-1">
+                      {files.data.map((f) => (
+                        <li
+                          key={f.id}
+                          className="flex items-center justify-between rounded border border-border p-2 text-sm"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <FileIcon file={f} />
+                            <span className="truncate">{f.file_name}</span>
+                            <span className="text-xs text-muted shrink-0">
+                              {formatFileSize(f.file_size)}
+                            </span>
+                            {f.scan_status === 'pending' && (
+                              <span className="text-xs text-warning shrink-0">病毒扫描中</span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0 ml-2">
+                            {(isImageFile(f) || isPdfFile(f)) && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                               
+                                onClick={() => handlePreview(f)}
+                                disabled={loadingUrls.has(f.id)}
+                                title="预览"
+                              >
+                                <Eye size={14} />
+                              </Button>
+                            )}
+                            <Button
+                              type="button"
+                              variant="ghost"
+                             
+                              onClick={() => handleDownload(f)}
+                              disabled={loadingUrls.has(f.id)}
+                              title="下载"
+                            >
+                              <Download size={14} />
+                            </Button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             ) : (
               <p className="text-sm text-muted">学生尚未正式提交。</p>
@@ -251,6 +347,35 @@ export default function Grading() {
           </CardBody>
         </Card>
       </div>
+
+      {/* 文件预览弹窗 */}
+      {previewFile && signedUrls[previewFile.id] && (
+        <div className="mt-4">
+          <Card>
+            <CardBody>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="font-medium text-sm">{previewFile.file_name}</h3>
+                <Button type="button" variant="ghost" onClick={() => setPreviewFile(null)}>
+                  <X size={14} />
+                </Button>
+              </div>
+              {isImageFile(previewFile) ? (
+                <img
+                  src={signedUrls[previewFile.id]}
+                  alt={previewFile.file_name}
+                  className="max-h-96 rounded border border-border object-contain"
+                />
+              ) : isPdfFile(previewFile) ? (
+                <iframe
+                  src={signedUrls[previewFile.id]}
+                  title={previewFile.file_name}
+                  className="h-[600px] w-full rounded border border-border"
+                />
+              ) : null}
+            </CardBody>
+          </Card>
+        </div>
+      )}
     </div>
   )
 }

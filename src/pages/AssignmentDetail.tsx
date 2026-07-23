@@ -1,6 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Save, Send, ShieldAlert, Maximize, Timer } from 'lucide-react'
+import {
+  ArrowLeft, Save, Send, ShieldAlert, Maximize, Timer,
+  Upload, X, FileText, Image, File, Trash2, Download, Eye,
+} from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -9,13 +12,46 @@ import { DictationPanel, type DictationAnswer } from '@/components/DictationPane
 import {
   useSubmission,
   useSubmissionVersions,
+  useSubmissionFiles,
   useFinalizeSubmission,
   useSaveDraft,
+  useCreateDraftVersion,
+  useUploadSubmissionFile,
+  useDeleteSubmissionFile,
 } from '@/hooks/useSubmissions'
 import { useSubmissionRealtime } from '@/hooks/useRealtime'
 import { useTask, useTaskQuestions } from '@/hooks/useTasks'
 import { useAntiCheat } from '@/hooks/useAntiCheat'
 import { useAuthStore } from '@/store/useAuthStore'
+import {
+  computeSHA256,
+  createSignedFileUrl,
+  isImageFile,
+  isPdfFile,
+  formatFileSize,
+  type SubmissionFile,
+} from '@/services/submissions'
+
+const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50MB
+const ALLOWED_MIME_PREFIXES = [
+  'image/', 'application/pdf', 'text/',
+  'application/msword', 'application/vnd.openxmlformats-officedocument.',
+  'application/vnd.ms-', 'application/zip', 'application/x-7z-compressed',
+]
+
+function isAllowedMime(mime: string): boolean {
+  if (!mime) return false
+  return ALLOWED_MIME_PREFIXES.some((p) => mime.startsWith(p))
+}
+
+interface UploadingFile {
+  file: File
+  sha256: string | null
+  progress: number
+  error: string | null
+  status: 'pending' | 'hashing' | 'uploading' | 'done' | 'error'
+  id: string
+}
 
 export default function AssignmentDetail() {
   const { submissionId } = useParams<{ submissionId: string }>()
@@ -26,12 +62,52 @@ export default function AssignmentDetail() {
   const questions = useTaskQuestions(submission.data?.task_id, false)
   const finalize = useFinalizeSubmission()
   const saveDraft = useSaveDraft()
+  const createDraftVer = useCreateDraftVersion()
+  const uploadFile = useUploadSubmissionFile()
+  const deleteFile = useDeleteSubmissionFile()
+
+  // 自动创建 draft version（无版本时，文件上传需要 versionId）
+  const autoCreatedRef = useRef(false)
+  useEffect(() => {
+    if (
+      !autoCreatedRef.current &&
+      submission.data?.status === 'draft' &&
+      versions.data &&
+      versions.data.length === 0 &&
+      profile
+    ) {
+      autoCreatedRef.current = true
+      createDraftVer.mutateAsync({
+        submissionId: submission.data.id,
+        createdBy: profile.id,
+      }).catch((err) => {
+        console.error('[auto-create-draft] 创建版本失败:', err)
+        autoCreatedRef.current = false // 允许重试
+      })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [submission.data?.status, versions.data, profile, createDraftVer])
+
   const [text, setText] = useState('')
   const [dictation, setDictation] = useState<DictationAnswer[]>([])
   const [msg, setMsg] = useState<string | null>(null)
   const [remainingMs, setRemainingMs] = useState<number | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const autoSubmittedRef = useRef(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // 文件上传状态
+  const [uploadingFiles, setUploadingFiles] = useState<UploadingFile[]>([])
+  const [dragOver, setDragOver] = useState(false)
+
+  // 当前查看的版本 ID（默认当前版本）
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null)
+  const currentVersionId = selectedVersionId || versions.data?.[0]?.id || null
+  const files = useSubmissionFiles(currentVersionId ?? undefined)
+
+  // 签名 URL 缓存（短期）
+  const [signedUrls, setSignedUrls] = useState<Record<string, string>>({})
+  const [previewFile, setPreviewFile] = useState<SubmissionFile | null>(null)
 
   useSubmissionRealtime(submissionId)
 
@@ -58,10 +134,10 @@ export default function AssignmentDetail() {
 
   // 载入最新版本作答内容
   useEffect(() => {
-    if (versions.data && versions.data.length > 0) {
+    if (versions.data && versions.data.length > 0 && !selectedVersionId) {
       setText(versions.data[0].text_answer ?? '')
     }
-  }, [versions.data])
+  }, [versions.data, selectedVersionId])
 
   // 组合最终提交文本：正文 + 听写作答汇总
   const composeAnswer = () => {
@@ -102,7 +178,131 @@ export default function AssignmentDetail() {
     setMsg('已正式提交')
   }
 
-  // 倒计时：任务有截止时间且未定稿时启动，超时自动提交一次
+  // ========== 文件上传 ==========
+
+  const handleFilesSelected = useCallback(
+    async (fileList: FileList | File[]) => {
+      if (!submission.data || !profile) return
+      const files = Array.from(fileList)
+
+      for (const file of files) {
+        // 校验
+        if (file.size > MAX_FILE_SIZE) {
+          setUploadingFiles((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              file,
+              sha256: null,
+              progress: 0,
+              error: `文件超过 ${formatFileSize(MAX_FILE_SIZE)} 限制`,
+              status: 'error',
+            },
+          ])
+          continue
+        }
+        if (!isAllowedMime(file.type)) {
+          setUploadingFiles((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              file,
+              sha256: null,
+              progress: 0,
+              error: `不支持的文件类型: ${file.type || '未知'}`,
+              status: 'error',
+            },
+          ])
+          continue
+        }
+
+        const uid = crypto.randomUUID()
+        setUploadingFiles((prev) => [
+          ...prev,
+          { id: uid, file, sha256: null, progress: 0, error: null, status: 'hashing' },
+        ])
+
+        // 计算 SHA-256（不阻塞 UI）
+        computeSHA256(file).then((hash) => {
+          setUploadingFiles((prev) =>
+            prev.map((f) => (f.id === uid ? { ...f, sha256: hash, status: 'uploading' } : f)),
+          )
+        })
+
+        // 上传
+        try {
+          await uploadFile.mutateAsync({
+            submissionId: submission.data.id,
+            versionId: currentVersionId!,
+            organizationId: submission.data.organization_id,
+            studentId: profile.id,
+            file,
+          })
+          setUploadingFiles((prev) =>
+            prev.map((f) => (f.id === uid ? { ...f, progress: 100, status: 'done' } : f)),
+          )
+        } catch (e) {
+          setUploadingFiles((prev) =>
+            prev.map((f) =>
+              f.id === uid
+                ? { ...f, error: e instanceof Error ? e.message : 'Upload failed', status: 'error' }
+                : f,
+            ),
+          )
+        }
+      }
+    },
+    [submission.data, profile, currentVersionId, uploadFile],
+  )
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    setDragOver(true)
+  }
+  const handleDragLeave = () => setDragOver(false)
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setDragOver(false)
+    if (isFinalized) return
+    handleFilesSelected(e.dataTransfer.files)
+  }
+
+  const removeFromUploadList = (uid: string) => {
+    setUploadingFiles((prev) => prev.filter((f) => f.id !== uid))
+  }
+
+  const handleDeleteFile = async (f: SubmissionFile) => {
+    if (!confirm(`确认删除文件 "${f.file_name}"？`)) return
+    try {
+      await deleteFile.mutateAsync(f)
+    } catch {
+      setMsg('删除失败')
+    }
+  }
+
+  const handlePreviewFile = async (f: SubmissionFile) => {
+    if (signedUrls[f.id]) {
+      setPreviewFile(f)
+      return
+    }
+    try {
+      const url = await createSignedFileUrl(f.object_key)
+      setSignedUrls((prev) => ({ ...prev, [f.id]: url }))
+      setPreviewFile(f)
+    } catch {
+      setMsg('无法生成预览链接')
+    }
+  }
+
+  // ========== 版本切换 ==========
+
+  const handleVersionSelect = (versionId: string) => {
+    setSelectedVersionId(versionId)
+    setPreviewFile(null)
+    setSignedUrls({})
+  }
+
+  // 倒计时
   const dueTs = task.data?.due_date ? new Date(task.data.due_date).getTime() : null
   useEffect(() => {
     if (isFinalized || !dueTs) {
@@ -137,12 +337,23 @@ export default function AssignmentDetail() {
     return `${h > 0 ? `${h}时` : ''}${m}分${sec}秒`
   }
 
+  const getFileIcon = (f: SubmissionFile | UploadingFile) => {
+    const mime = 'mime_type' in f ? f.mime_type : f.file.type
+    if (mime.startsWith('image/')) return <Image size={14} />
+    if (mime === 'application/pdf') return <FileText size={14} />
+    return <File size={14} />
+  }
+
   if (submission.isLoading) return <p className="text-sm text-muted">加载中…</p>
   if (!submission.data) return <p className="text-sm text-muted">作业不存在或无权访问。</p>
 
   const canSubmit = hasDictation
     ? dictation.some((d) => d.answer.trim())
-    : Boolean(text.trim())
+    : Boolean(text.trim()) || (files.data && files.data.length > 0)
+
+  // 当前选中的版本
+  const selectedVersion = versions.data?.find((v) => v.id === currentVersionId)
+  const isSelectedFinalized = selectedVersion?.finalized ?? false
 
   return (
     <div ref={containerRef}>
@@ -233,6 +444,192 @@ export default function AssignmentDetail() {
               )}
             </CardBody>
           </Card>
+
+          {/* ======== 文件上传区域 ======== */}
+          <Card>
+            <CardBody>
+              <h2 className="mb-2 font-display font-semibold">附加文件</h2>
+              {isSelectedFinalized ? (
+                <p className="mb-2 text-xs text-muted">
+                  此版本已正式提交，文件不可修改。
+                </p>
+              ) : (
+                <p className="mb-2 text-xs text-muted">
+                  支持图片、PDF、文档、压缩包（单文件 ≤ 50MB）。提交后文件不可修改。
+                </p>
+              )}
+
+              {/* 拖拽上传区域 */}
+              {!isSelectedFinalized && (
+                <div
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                  onClick={() => fileInputRef.current?.click()}
+                  className={`mb-3 cursor-pointer rounded border-2 border-dashed p-4 text-center transition-colors ${
+                    dragOver
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:border-primary/50'
+                  }`}
+                >
+                  <Upload size={20} className="mx-auto mb-1 text-muted" />
+                  <p className="text-sm text-muted">
+                    拖拽文件到此处或点击选择文件
+                  </p>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => e.target.files && handleFilesSelected(e.target.files)}
+                  />
+                </div>
+              )}
+
+              {/* 已上传文件列表 */}
+              {files.isLoading && <p className="text-xs text-muted">加载文件列表…</p>}
+              {files.data && files.data.length > 0 && (
+                <ul className="space-y-1.5">
+                  {files.data.map((f) => (
+                    <li
+                      key={f.id}
+                      className="flex items-center justify-between rounded border border-border p-2 text-sm"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        {getFileIcon(f)}
+                        <span className="truncate">{f.file_name}</span>
+                        <span className="text-xs text-muted shrink-0">{formatFileSize(f.file_size)}</span>
+                        {f.sha256 && (
+                          <span className="text-xs text-muted font-mono shrink-0 hidden sm:inline">
+                            SHA256: {f.sha256.substring(0, 8)}…
+                          </span>
+                        )}
+                        {f.scan_status === 'pending' && (
+                          <span className="text-xs text-warning shrink-0">病毒扫描中</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0 ml-2">
+                        {(isImageFile(f) || isPdfFile(f)) && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                           
+                            onClick={() => handlePreviewFile(f)}
+                            title="预览"
+                          >
+                            <Eye size={14} />
+                          </Button>
+                        )}
+                        <a
+                          href={signedUrls[f.id] || '#'}
+                          onClick={async (e) => {
+                            if (!signedUrls[f.id]) {
+                              e.preventDefault()
+                              try {
+                                const url = await createSignedFileUrl(f.object_key)
+                                setSignedUrls((prev) => ({ ...prev, [f.id]: url }))
+                                window.open(url, '_blank')
+                              } catch {
+                                setMsg('无法生成下载链接')
+                              }
+                            }
+                          }}
+                          className="inline-flex items-center text-muted hover:text-fg"
+                          title="下载"
+                        >
+                          <Download size={14} />
+                        </a>
+                        {!isSelectedFinalized && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                           
+                            onClick={() => handleDeleteFile(f)}
+                            title="删除"
+                            className="text-danger hover:text-danger"
+                          >
+                            <Trash2 size={14} />
+                          </Button>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {(!files.data || files.data.length === 0) && (
+                <p className="text-xs text-muted">尚未上传任何文件。</p>
+              )}
+
+              {/* 上传中列表 */}
+              {uploadingFiles.filter((f) => f.status !== 'done').length > 0 && (
+                <ul className="mt-2 space-y-1 border-t border-border pt-2">
+                  {uploadingFiles
+                    .filter((f) => f.status !== 'done')
+                    .map((uf) => (
+                      <li
+                        key={uf.id}
+                        className="flex items-center justify-between rounded border border-border p-1.5 text-xs"
+                      >
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          {getFileIcon(uf)}
+                          <span className="truncate">{uf.file.name}</span>
+                          {uf.sha256 && (
+                            <span className="text-muted font-mono hidden sm:inline">
+                              SHA256: {uf.sha256.substring(0, 8)}…
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          {uf.status === 'hashing' && <span className="text-muted">计算哈希…</span>}
+                          {uf.status === 'uploading' && <span className="text-muted">上传中…</span>}
+                          {uf.status === 'error' && (
+                            <span className="text-danger">{uf.error}</span>
+                          )}
+                          <Button
+                            type="button"
+                            variant="ghost"
+                           
+                            onClick={() => removeFromUploadList(uf.id)}
+                          >
+                            <X size={12} />
+                          </Button>
+                        </div>
+                      </li>
+                    ))}
+                </ul>
+              )}
+            </CardBody>
+          </Card>
+
+          {/* 文件预览 */}
+          {previewFile && signedUrls[previewFile.id] && (
+            <Card>
+              <CardBody>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-medium text-sm">{previewFile.file_name}</h3>
+                  <Button type="button" variant="ghost" onClick={() => setPreviewFile(null)}>
+                    <X size={14} />
+                  </Button>
+                </div>
+                {isImageFile(previewFile) ? (
+                  <img
+                    src={signedUrls[previewFile.id]}
+                    alt={previewFile.file_name}
+                    className="max-h-80 rounded border border-border object-contain"
+                  />
+                ) : isPdfFile(previewFile) ? (
+                  <iframe
+                    src={signedUrls[previewFile.id]}
+                    title={previewFile.file_name}
+                    className="h-96 w-full rounded border border-border"
+                  />
+                ) : (
+                  <p className="text-sm text-muted">此文件类型暂不支持预览，请下载后查看。</p>
+                )}
+              </CardBody>
+            </Card>
+          )}
         </div>
 
         <div>
@@ -244,16 +641,31 @@ export default function AssignmentDetail() {
               ) : (
                 <ul className="space-y-2">
                   {(versions.data ?? []).map((v) => (
-                    <li key={v.id} className="rounded border border-border p-2 text-sm">
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium">v{v.version_no}</span>
-                        <span className="text-xs text-muted">
-                          {v.finalized ? '已提交' : '草稿'}
-                        </span>
-                      </div>
-                      <p className="mt-1 text-xs text-muted">
-                        {new Date(v.created_at).toLocaleString()}
-                      </p>
+                    <li key={v.id}>
+                      <button
+                        type="button"
+                        onClick={() => handleVersionSelect(v.id)}
+                        className={`w-full rounded border p-2 text-left text-sm transition-colors ${
+                          currentVersionId === v.id
+                            ? 'border-primary bg-primary/5'
+                            : 'border-border hover:border-primary/50'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium">v{v.version_no}</span>
+                          <span className={`text-xs ${v.finalized ? 'text-success' : 'text-warning'}`}>
+                            {v.finalized ? '已提交' : '草稿'}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs text-muted">
+                          {new Date(v.created_at).toLocaleString()}
+                        </p>
+                        {v.finalized_at && v.finalized && (
+                          <p className="text-xs text-muted">
+                            提交于 {new Date(v.finalized_at).toLocaleString()}
+                          </p>
+                        )}
+                      </button>
                     </li>
                   ))}
                 </ul>

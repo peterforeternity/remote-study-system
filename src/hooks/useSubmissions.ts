@@ -4,9 +4,13 @@ import {
   getSubmissionById,
   listTaskSubmissions,
   createSubmission,
-  finalizeTextSubmission,
+  finalizeSubmission,
   saveDraftVersion,
+  createDraftVersion,
   listVersions,
+  listSubmissionFiles,
+  uploadSubmissionFile,
+  deleteSubmissionFile,
 } from '@/services/submissions'
 import type { Submission } from '@/types'
 
@@ -42,6 +46,14 @@ export function useSubmissionVersions(submissionId: string | undefined) {
   })
 }
 
+export function useSubmissionFiles(versionId: string | undefined) {
+  return useQuery({
+    queryKey: ['submission-files', versionId],
+    queryFn: () => listSubmissionFiles(versionId!),
+    enabled: Boolean(versionId),
+  })
+}
+
 export function useCreateSubmission() {
   const qc = useQueryClient()
   return useMutation({
@@ -56,17 +68,53 @@ export function useCreateSubmission() {
 export function useFinalizeSubmission() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (params: {
+    mutationFn: async (params: {
       submission: Submission
       createdBy: string
       textAnswer: string
       note?: string
-    }) => finalizeTextSubmission(params),
+    }) => {
+      // 查找当前 draft version，通过 RPC finalize
+      const versions = await listVersions(params.submission.id)
+      const draftVersion = versions.find((v) => !v.finalized)
+      if (!draftVersion) {
+        throw new Error('No draft version found to finalize')
+      }
+      return finalizeSubmission({
+        submission: params.submission,
+        versionId: draftVersion.id,
+        createdBy: params.createdBy,
+        textAnswer: params.textAnswer,
+        note: params.note,
+      })
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['my-submission'] })
       qc.invalidateQueries({ queryKey: ['task-submissions'] })
       qc.invalidateQueries({ queryKey: ['submission'] })
       qc.invalidateQueries({ queryKey: ['submission-versions'] })
+      qc.invalidateQueries({ queryKey: ['submission-files'] })
+    },
+  })
+}
+
+/** 新版 finalize：使用 draft version ID 而非创建新版本（适配 RPC） */
+export function useFinalizeDraft() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (params: {
+      submission: Submission
+      versionId: string
+      createdBy: string
+      textAnswer: string
+      note?: string
+    }) => finalizeSubmission(params),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['my-submission'] })
+      qc.invalidateQueries({ queryKey: ['task-submissions'] })
+      qc.invalidateQueries({ queryKey: ['submission'] })
+      qc.invalidateQueries({ queryKey: ['submission-versions'] })
+      qc.invalidateQueries({ queryKey: ['submission-files'] })
     },
   })
 }
@@ -78,6 +126,37 @@ export function useSaveDraft() {
       saveDraftVersion(params),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['submission-versions'] })
+    },
+  })
+}
+
+export function useCreateDraftVersion() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (params: { submissionId: string; createdBy: string }) =>
+      createDraftVersion(params.submissionId, params.createdBy),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['submission-versions'] })
+    },
+  })
+}
+
+export function useUploadSubmissionFile() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: uploadSubmissionFile,
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ['submission-files', variables.versionId] })
+    },
+  })
+}
+
+export function useDeleteSubmissionFile() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: deleteSubmissionFile,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['submission-files'] })
     },
   })
 }

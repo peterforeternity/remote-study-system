@@ -119,22 +119,30 @@ async function main() {
   subTargetId = submissionId
   console.log(`  submission id = ${submissionId}`)
 
+  // 读取 submission 当前 version（乐观锁）
+  const { data: curSub } = await student.client.from('submissions').select('version').eq('id', submissionId).single()
+  const expectedVer = curSub?.version ?? 0
+
   // 草稿版本（未 finalize）
   const { error: draftErr } = await student.client.from('submission_versions').insert({
     submission_id: submissionId, version_no: 1, text_answer: '草稿内容', finalized: false, created_by: student.user.id,
   })
   check(!draftErr, `保存草稿版本 (${draftErr?.message ?? 'ok'})`)
 
-  // 正式提交：新建 finalized 版本 + 更新状态 submitted
-  const { data: finalVer, error: finErr } = await student.client.from('submission_versions').insert({
-    submission_id: submissionId, version_no: 2, text_answer: '加法交换律：a+b=b+a。答案选A。',
-    finalized: true, finalized_at: new Date().toISOString(), created_by: student.user.id,
-  }).select('*').single()
-  check(!finErr && !!finalVer, `创建正式版本 (${finErr?.message ?? 'ok'})`)
+  // 通过 RPC finalize，原子化更新版本和状态
+  const { data: draftRpc } = await student.client.rpc('create_submission_draft_version', { p_submission_id: submissionId })
+  const draft = Array.isArray(draftRpc) ? draftRpc[0] : draftRpc
+  check(!!draft, `创建 draft version (${draft?.id ?? 'failed'})`)
 
-  await student.client.from('submissions').update({ status: 'submitted', current_version_id: finalVer.id }).eq('id', submissionId)
+  const { data: fr, error: fe } = await student.client.rpc('finalize_submission', {
+    p_submission_id: submissionId,
+    p_version_id: draft.id,
+    p_expected_version: expectedVer,
+  })
+  check(!fe && !!fr, `finalize RPC (${fe?.message ?? 'ok'})`)
+
   const { data: afterSubmit } = await student.client.from('submissions').select('status').eq('id', submissionId).single()
-  check(afterSubmit?.status === 'submitted', `作业状态为 submitted (实际: ${afterSubmit?.status})`)
+  check(afterSubmit?.status === 'submitted' || afterSubmit?.status === 'resubmitted', `作业状态为 submitted (实际: ${afterSubmit?.status})`)
 
   // ---------- 教师：读取提交并批改 ----------
   section('教师批改')

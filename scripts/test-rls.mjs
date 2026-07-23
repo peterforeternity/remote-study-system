@@ -38,11 +38,15 @@ async function main() {
   const { data: s2sub } = await s2.client.from('submissions').insert({
     task_id: task.id, student_id: s2.user.id, organization_id: orgId, status: 'draft',
   }).select('*').single()
-  const { data: s2ver } = await s2.client.from('submission_versions').insert({
-    submission_id: s2sub.id, version_no: 1, text_answer: 's2 私密作答', finalized: true,
-    finalized_at: new Date().toISOString(), created_by: s2.user.id,
-  }).select('*').single()
-  await s2.client.from('submissions').update({ status: 'submitted', current_version_id: s2ver.id }).eq('id', s2sub.id)
+  const { data: curSub } = await s2.client.from('submissions').select('version').eq('id', s2sub.id).single()
+  const expectedVer = curSub?.version ?? 0
+  const { data: dr } = await s2.client.rpc('create_submission_draft_version', { p_submission_id: s2sub.id })
+  const draftVer = Array.isArray(dr) ? dr[0] : dr
+  await s2.client.rpc('finalize_submission', {
+    p_submission_id: s2sub.id, p_version_id: draftVer.id, p_expected_version: expectedVer,
+  })
+  const { data: s2subFinal } = await s2.client.from('submissions').select('*').eq('id', s2sub.id).single()
+  const s2ver = { id: s2subFinal.current_version_id }
 
   section('RLS 越权测试')
 
